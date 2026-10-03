@@ -1721,7 +1721,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d045de693cb712d0b22c6a64be5b953f67b3ce00ab5ad3dd5d8b441886ab8e1a"
 dependencies = [
  "quote",
- "syn 3.0.5",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -2894,7 +2894,7 @@ dependencies = [
  "libc",
  "log",
  "rustversion",
- "windows-link 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "windows-link 0.1.3",
  "windows-result 0.4.1 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
@@ -5291,6 +5291,33 @@ name = "makepad-byteorder-lite"
 version = "0.1.0"
 
 [[package]]
+name = "makepad-calculator"
+version = "0.1.0"
+dependencies = [
+ "makepad-ai-services",
+ "makepad-app-module",
+ "makepad-strict-json",
+ "makepad-widgets",
+ "makepad-wm-theme",
+]
+
+[[package]]
+name = "makepad-civil-time"
+version = "0.1.0"
+
+[[package]]
+name = "makepad-clock"
+version = "0.1.0"
+dependencies = [
+ "makepad-ai-services",
+ "makepad-aichat",
+ "makepad-app-module",
+ "makepad-widgets",
+ "makepad-wm-api",
+ "makepad-wm-theme",
+]
+
+[[package]]
 name = "makepad-code-editor"
 version = "2.0.0"
 dependencies = [
@@ -5523,6 +5550,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "makepad-notes"
+version = "0.1.0"
+dependencies = [
+ "makepad-ai-services",
+ "makepad-app-module",
+ "makepad-civil-time",
+ "makepad-strict-json",
+ "makepad-widgets",
+ "makepad-wm-theme",
+]
+
+[[package]]
 name = "makepad-objc-sys"
 version = "1.0.0"
 
@@ -5582,6 +5621,18 @@ dependencies = [
 [[package]]
 name = "makepad-regex"
 version = "0.1.0"
+
+[[package]]
+name = "makepad-reminders"
+version = "0.1.0"
+dependencies = [
+ "makepad-ai-services",
+ "makepad-app-module",
+ "makepad-civil-time",
+ "makepad-strict-json",
+ "makepad-widgets",
+ "makepad-wm-theme",
+]
 
 [[package]]
 name = "makepad-script"
@@ -5660,6 +5711,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "makepad-task"
+version = "0.1.0"
+dependencies = [
+ "makepad-widgets",
+ "makepad-wm-api",
+ "makepad-wm-theme",
+]
+
+[[package]]
 name = "makepad-terminal"
 version = "0.1.0"
 dependencies = [
@@ -5691,6 +5751,18 @@ version = "1.0.0"
 dependencies = [
  "makepad-derive-wasm-bridge",
  "makepad-live-id",
+]
+
+[[package]]
+name = "makepad-weather"
+version = "0.1.0"
+dependencies = [
+ "makepad-ai-services",
+ "makepad-aichat",
+ "makepad-app-module",
+ "makepad-widgets",
+ "makepad-wm-api",
+ "makepad-wm-theme",
 ]
 
 [[package]]
@@ -6852,7 +6924,7 @@ dependencies = [
 [[package]]
 name = "octos-agent"
 version = "2.0.3-rc.13"
-source = "git+https://github.com/octos-org/octos.git?rev=ae230ce04d57f3c29cf6c2518e5956a86c07d788#ae230ce04d57f3c29cf6c2518e5956a86c07d788"
+source = "git+https://github.com/octos-org/octos.git?rev=056173e85b150e387805fc307fe231064ac1ed35#056173e85b150e387805fc307fe231064ac1ed35"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -6982,7 +7054,7 @@ dependencies = [
 [[package]]
 name = "octos-bus"
 version = "2.0.3-rc.13"
-source = "git+https://github.com/octos-org/octos.git?rev=ae230ce04d57f3c29cf6c2518e5956a86c07d788#ae230ce04d57f3c29cf6c2518e5956a86c07d788"
+source = "git+https://github.com/octos-org/octos.git?rev=056173e85b150e387805fc307fe231064ac1ed35#056173e85b150e387805fc307fe231064ac1ed35"
 dependencies = [
  "aes 0.8.4",
  "async-trait",
@@ -7011,7 +7083,7 @@ dependencies = [
 [[package]]
 name = "octos-cli"
 version = "2.0.3-rc.13"
-source = "git+https://github.com/octos-org/octos.git?rev=ae230ce04d57f3c29cf6c2518e5956a86c07d788#ae230ce04d57f3c29cf6c2518e5956a86c07d788"
+source = "git+https://github.com/octos-org/octos.git?rev=056173e85b150e387805fc307fe231064ac1ed35#056173e85b150e387805fc307fe231064ac1ed35"
 dependencies = [
  "agent-client-protocol",
  "argon2",
@@ -7092,7 +7164,7 @@ dependencies = [
 [[package]]
 name = "octos-core"
 version = "2.0.3-rc.13"
-source = "git+https://github.com/octos-org/octos.git?rev=ae230ce04d57f3c29cf6c2518e5956a86c07d788#ae230ce04d57f3c29cf6c2518e5956a86c07d788"
+source = "git+https://github.com/octos-org/octos.git?rev=056173e85b150e387805fc307fe231064ac1ed35#056173e85b150e387805fc307fe231064ac1ed35"
 dependencies = [
  "chrono",
  "eyre",
@@ -7106,7 +7178,7 @@ dependencies = [
 [[package]]
 name = "octos-diagnostics"
 version = "2.0.3-rc.13"
-source = "git+https://github.com/octos-org/octos.git?rev=ae230ce04d57f3c29cf6c2518e5956a86c07d788#ae230ce04d57f3c29cf6c2518e5956a86c07d788"
+source = "git+https://github.com/octos-org/octos.git?rev=056173e85b150e387805fc307fe231064ac1ed35#056173e85b150e387805fc307fe231064ac1ed35"
 dependencies = [
  "eyre",
  "octos-core",
@@ -7118,7 +7190,7 @@ dependencies = [
 [[package]]
 name = "octos-fleet"
 version = "2.0.3-rc.13"
-source = "git+https://github.com/octos-org/octos.git?rev=ae230ce04d57f3c29cf6c2518e5956a86c07d788#ae230ce04d57f3c29cf6c2518e5956a86c07d788"
+source = "git+https://github.com/octos-org/octos.git?rev=056173e85b150e387805fc307fe231064ac1ed35#056173e85b150e387805fc307fe231064ac1ed35"
 dependencies = [
  "eyre",
  "octos-core",
@@ -7134,7 +7206,7 @@ dependencies = [
 [[package]]
 name = "octos-fleet-worker"
 version = "2.0.3-rc.13"
-source = "git+https://github.com/octos-org/octos.git?rev=ae230ce04d57f3c29cf6c2518e5956a86c07d788#ae230ce04d57f3c29cf6c2518e5956a86c07d788"
+source = "git+https://github.com/octos-org/octos.git?rev=056173e85b150e387805fc307fe231064ac1ed35#056173e85b150e387805fc307fe231064ac1ed35"
 dependencies = [
  "async-trait",
  "eyre",
@@ -7151,7 +7223,7 @@ dependencies = [
 [[package]]
 name = "octos-llm"
 version = "2.0.3-rc.13"
-source = "git+https://github.com/octos-org/octos.git?rev=ae230ce04d57f3c29cf6c2518e5956a86c07d788#ae230ce04d57f3c29cf6c2518e5956a86c07d788"
+source = "git+https://github.com/octos-org/octos.git?rev=056173e85b150e387805fc307fe231064ac1ed35#056173e85b150e387805fc307fe231064ac1ed35"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -7175,7 +7247,7 @@ dependencies = [
 [[package]]
 name = "octos-memory"
 version = "2.0.3-rc.13"
-source = "git+https://github.com/octos-org/octos.git?rev=ae230ce04d57f3c29cf6c2518e5956a86c07d788#ae230ce04d57f3c29cf6c2518e5956a86c07d788"
+source = "git+https://github.com/octos-org/octos.git?rev=056173e85b150e387805fc307fe231064ac1ed35#056173e85b150e387805fc307fe231064ac1ed35"
 dependencies = [
  "bincode",
  "chrono",
@@ -7194,7 +7266,7 @@ dependencies = [
 [[package]]
 name = "octos-pipeline"
 version = "2.0.3-rc.13"
-source = "git+https://github.com/octos-org/octos.git?rev=ae230ce04d57f3c29cf6c2518e5956a86c07d788#ae230ce04d57f3c29cf6c2518e5956a86c07d788"
+source = "git+https://github.com/octos-org/octos.git?rev=056173e85b150e387805fc307fe231064ac1ed35#056173e85b150e387805fc307fe231064ac1ed35"
 dependencies = [
  "async-trait",
  "chrono",
@@ -7216,7 +7288,7 @@ dependencies = [
 [[package]]
 name = "octos-plugin"
 version = "2.0.3-rc.13"
-source = "git+https://github.com/octos-org/octos.git?rev=ae230ce04d57f3c29cf6c2518e5956a86c07d788#ae230ce04d57f3c29cf6c2518e5956a86c07d788"
+source = "git+https://github.com/octos-org/octos.git?rev=056173e85b150e387805fc307fe231064ac1ed35#056173e85b150e387805fc307fe231064ac1ed35"
 dependencies = [
  "eyre",
  "metrics",
@@ -7230,7 +7302,7 @@ dependencies = [
 [[package]]
 name = "octos-research"
 version = "2.0.3-rc.13"
-source = "git+https://github.com/octos-org/octos.git?rev=ae230ce04d57f3c29cf6c2518e5956a86c07d788#ae230ce04d57f3c29cf6c2518e5956a86c07d788"
+source = "git+https://github.com/octos-org/octos.git?rev=056173e85b150e387805fc307fe231064ac1ed35#056173e85b150e387805fc307fe231064ac1ed35"
 dependencies = [
  "base64 0.22.1",
  "chromiumoxide",
@@ -7254,7 +7326,7 @@ dependencies = [
 [[package]]
 name = "octos-sandbox"
 version = "0.1.0"
-source = "git+https://github.com/octos-org/octos.git?rev=ae230ce04d57f3c29cf6c2518e5956a86c07d788#ae230ce04d57f3c29cf6c2518e5956a86c07d788"
+source = "git+https://github.com/octos-org/octos.git?rev=056173e85b150e387805fc307fe231064ac1ed35#056173e85b150e387805fc307fe231064ac1ed35"
 dependencies = [
  "clap",
  "eyre",
@@ -7269,7 +7341,7 @@ dependencies = [
 [[package]]
 name = "octos-services"
 version = "2.0.3-rc.13"
-source = "git+https://github.com/octos-org/octos.git?rev=ae230ce04d57f3c29cf6c2518e5956a86c07d788#ae230ce04d57f3c29cf6c2518e5956a86c07d788"
+source = "git+https://github.com/octos-org/octos.git?rev=056173e85b150e387805fc307fe231064ac1ed35#056173e85b150e387805fc307fe231064ac1ed35"
 dependencies = [
  "chrono",
  "dirs",
@@ -7291,7 +7363,7 @@ dependencies = [
 [[package]]
 name = "octos-store"
 version = "2.0.3-rc.13"
-source = "git+https://github.com/octos-org/octos.git?rev=ae230ce04d57f3c29cf6c2518e5956a86c07d788#ae230ce04d57f3c29cf6c2518e5956a86c07d788"
+source = "git+https://github.com/octos-org/octos.git?rev=056173e85b150e387805fc307fe231064ac1ed35#056173e85b150e387805fc307fe231064ac1ed35"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -7311,7 +7383,7 @@ dependencies = [
 [[package]]
 name = "octos-swarm"
 version = "2.0.3-rc.13"
-source = "git+https://github.com/octos-org/octos.git?rev=ae230ce04d57f3c29cf6c2518e5956a86c07d788#ae230ce04d57f3c29cf6c2518e5956a86c07d788"
+source = "git+https://github.com/octos-org/octos.git?rev=056173e85b150e387805fc307fe231064ac1ed35#056173e85b150e387805fc307fe231064ac1ed35"
 dependencies = [
  "async-trait",
  "chrono",
@@ -7330,7 +7402,7 @@ dependencies = [
 [[package]]
 name = "octos-workflows"
 version = "2.0.3-rc.13"
-source = "git+https://github.com/octos-org/octos.git?rev=ae230ce04d57f3c29cf6c2518e5956a86c07d788#ae230ce04d57f3c29cf6c2518e5956a86c07d788"
+source = "git+https://github.com/octos-org/octos.git?rev=056173e85b150e387805fc307fe231064ac1ed35#056173e85b150e387805fc307fe231064ac1ed35"
 dependencies = [
  "chrono",
  "eyre",
@@ -7451,9 +7523,9 @@ dependencies = [
 
 [[package]]
 name = "octosense-app-contract"
-version = "1.0.0"
+version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6df5ab53906a90e05be4e32693728539486f404bd8639d2782534338631200bf"
+checksum = "49dc5c33711174d79903daa03aef832c9b3f23c69f6dce37e6e016fdc4f6f937"
 dependencies = [
  "blake3",
  "serde",
@@ -7463,7 +7535,7 @@ dependencies = [
 [[package]]
 name = "octosense-app-hub"
 version = "0.1.0"
-source = "git+https://github.com/OctoSense-org/OctoSense-App-Hub?rev=58c3c8aed8fc811a16d67c5f784a8a44214ff876#58c3c8aed8fc811a16d67c5f784a8a44214ff876"
+source = "git+https://github.com/OctoSense-org/OctoSense-App-Hub?rev=0d5b47a2ae9eb98020feca26b7c895a3cf797dc1#0d5b47a2ae9eb98020feca26b7c895a3cf797dc1"
 dependencies = [
  "base64 0.22.1",
  "blake3",
@@ -7479,7 +7551,7 @@ dependencies = [
 [[package]]
 name = "octosense-app-hub-app"
 version = "0.1.0"
-source = "git+https://github.com/OctoSense-org/OctoSense-App-Hub?rev=58c3c8aed8fc811a16d67c5f784a8a44214ff876#58c3c8aed8fc811a16d67c5f784a8a44214ff876"
+source = "git+https://github.com/OctoSense-org/OctoSense-App-Hub?rev=0d5b47a2ae9eb98020feca26b7c895a3cf797dc1#0d5b47a2ae9eb98020feca26b7c895a3cf797dc1"
 dependencies = [
  "makepad-app-module",
  "makepad-widgets",
@@ -7507,7 +7579,7 @@ dependencies = [
 [[package]]
 name = "octosense-app-policy"
 version = "0.1.0"
-source = "git+https://github.com/OctoSense-org/OctoSense-App-Hub?rev=58c3c8aed8fc811a16d67c5f784a8a44214ff876#58c3c8aed8fc811a16d67c5f784a8a44214ff876"
+source = "git+https://github.com/OctoSense-org/OctoSense-App-Hub?rev=0d5b47a2ae9eb98020feca26b7c895a3cf797dc1#0d5b47a2ae9eb98020feca26b7c895a3cf797dc1"
 dependencies = [
  "makepad-widgets",
  "octosense-app-contract",
@@ -7529,7 +7601,7 @@ dependencies = [
 [[package]]
 name = "octosense-appstore"
 version = "0.1.0"
-source = "git+https://github.com/OctoSense-org/OctoSense-App-Hub?rev=58c3c8aed8fc811a16d67c5f784a8a44214ff876#58c3c8aed8fc811a16d67c5f784a8a44214ff876"
+source = "git+https://github.com/OctoSense-org/OctoSense-App-Hub?rev=0d5b47a2ae9eb98020feca26b7c895a3cf797dc1#0d5b47a2ae9eb98020feca26b7c895a3cf797dc1"
 dependencies = [
  "makepad-app-module",
  "makepad-widgets",
@@ -7581,6 +7653,7 @@ dependencies = [
  "octos-core",
  "octosense-llm-config",
  "serde_json",
+ "sha2 0.10.9",
  "tokio",
  "tokio-tungstenite 0.24.0",
  "tracing-subscriber",
@@ -7667,8 +7740,14 @@ dependencies = [
 name = "octosense-process-apps"
 version = "0.1.0"
 dependencies = [
+ "makepad-calculator",
+ "makepad-clock",
+ "makepad-notes",
+ "makepad-reminders",
  "makepad-sheets",
+ "makepad-task",
  "makepad-terminal",
+ "makepad-weather",
  "octosense-reference",
 ]
 
@@ -7690,11 +7769,16 @@ dependencies = [
  "makepad-ai-services",
  "makepad-aichat",
  "makepad-app-module",
+ "makepad-calculator",
+ "makepad-clock",
  "makepad-network",
+ "makepad-notes",
+ "makepad-reminders",
  "makepad-sheets",
  "makepad-strict-json",
  "makepad-studio-protocol",
  "makepad-terminal",
+ "makepad-weather",
  "makepad-widgets",
  "makepad-wm-api",
  "makepad-wm-theme",
@@ -10624,7 +10708,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell 1.21.4",
  "rustix",
  "windows-sys 0.61.2",

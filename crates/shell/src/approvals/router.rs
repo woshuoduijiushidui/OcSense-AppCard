@@ -121,6 +121,11 @@ const EXPIRED_KEPT: usize = 16;
 pub struct Notice {
     pub title: String,
     pub body: String,
+    /// The request this notice asks the person to answer ("Needs you: …
+    /// Open the sheet"): its notification goes once the request is no
+    /// longer pending, with its sheet line (answered, stopped, withdrawn,
+    /// expired). `None`: the notice stands on its own.
+    pub request: Option<RequestId>,
 }
 
 pub struct Router {
@@ -262,7 +267,14 @@ impl Router {
         if !self.pending.contains_key(id) {
             return false;
         }
+        let on_app = self.at_app.get(id).cloned();
         self.decide(id, Decision::Deny, "withdrawn", None, reason, now);
+        // On the owning app's own sheet: it stops asking too.
+        if let Some(app) = on_app {
+            if let Some(handler) = self.app_confirms.get_mut(&app) {
+                handler.withdrawn(id, reason);
+            }
+        }
         for sheet in &mut self.sheets {
             if let Some(line) = sheet.lines.iter_mut().find(|l| l.request == *id) {
                 line.answer = Some(super::sheet::Answer::Deny);
@@ -276,7 +288,7 @@ impl Router {
         std::mem::take(&mut self.notices)
     }
     fn notice(&mut self, title: impl Into<String>, body: impl Into<String>) {
-        self.notices.push(Notice { title: title.into(), body: body.into() });
+        self.notices.push(Notice { title: title.into(), body: body.into(), request: None });
     }
 
     /// Route one request. The decision may be given before this returns.
@@ -361,7 +373,12 @@ impl Router {
     fn surface(&mut self, req: &Request, surfaced: Surfaced, now: u64) -> u64 {
         let line = Line::for_request(req, surfaced, &self.contacts);
         let batch = req.context.batch.clone();
-        self.notice(format!("Needs you: {}", line.heading()), format!("{} asks. Open the sheet to approve or deny.", line.caller));
+        // Withdrawn with the sheet line: it points at the sheet.
+        self.notices.push(Notice {
+            title: format!("Needs you: {}", line.heading()),
+            body: format!("{} asks. Open the sheet to approve or deny.", line.caller),
+            request: Some(req.id.clone()),
+        });
         self.changed();
         if let Some(b) = &batch {
             if let Some(sheet) = self.sheets.iter_mut().find(|s| s.batch_id() == Some(&b.id) && !s.done()) {

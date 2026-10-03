@@ -494,6 +494,30 @@ fn sheet_model_shows_app_tool_caller_and_redacted_args() {
     assert!(labels.iter().any(|l| l.starts_with("Everything Mail asks")));
 }
 
+/// A turn from the person's own surface (the "Ask <app>" panel, a card's
+/// chat) is the person's: the sheet line and its toast say "for you". The
+/// shell's internal instance id reached the person ("Asked by Calendar's
+/// agent for shell-ask", the toast "Calendar's agent for shell-ask asks").
+/// Another client keeps its own name (a Rinx mini app).
+#[test]
+fn the_persons_own_surface_reads_for_you_never_its_instance_id() {
+    use super::sheet::caller_label;
+    for client in [crate::app_chat::INSTANCE, crate::glance_chat::INSTANCE] {
+        assert_eq!(caller_label("os.calendar", &Caller::OwnAgent { client: Some(client.into()) }), "Calendar's agent for you", "{client}");
+    }
+    assert_eq!(caller_label("rinx", &Caller::OwnAgent { client: Some("weather".into()) }), "Rinx's agent for weather");
+    assert_eq!(caller_label("os.calendar", &Caller::OwnAgent { client: None }), "Calendar's agent");
+    let (mut r, _) = router();
+    let caller = Caller::OwnAgent { client: Some(crate::app_chat::INSTANCE.into()) };
+    let request = make_request("os.calendar", ToolSpec::host("calendar.remove_event"), json!({"id": "evt-1"}), caller, ctx("ask-1", Trigger::Person), T0, 0);
+    let Route::Sheet(_) = r.request(request, T0) else { panic!() };
+    assert_eq!(r.front_sheet().unwrap().lines[0].caller, "Calendar's agent for you", "the sheet's \"Asked by\" line");
+    let notices = r.take_notices();
+    let toast = notices.iter().find(|n| n.title == "Needs you: Calendar \u{00b7} calendar.remove_event").expect("the sheet's toast");
+    assert_eq!(toast.body, "Calendar's agent for you asks. Open the sheet to approve or deny.");
+    assert!(notices.iter().all(|n| !format!("{} {}", n.title, n.body).contains(crate::app_chat::INSTANCE)), "{notices:?}");
+}
+
 #[test]
 fn a_batch_is_one_sheet_in_the_system_chat() {
     let (mut r, relay) = router();
@@ -521,6 +545,41 @@ fn a_batch_is_one_sheet_in_the_system_chat() {
     assert!(r.sheets().is_empty());
     assert_eq!(relay.take(), vec![(RequestId("b0".into()), Decision::ApproveOnce, "approved on the sheet".into()), (RequestId("b1".into()), Decision::Deny, "denied on the sheet".into())]);
     assert!(r.answer(sheet.id, &RequestId("b1".into()), Answer::Once, &g, T0).is_err(), "answered once");
+}
+
+/// G11: an app's question is shown and answered in its "Ask <app>" panel
+/// while that is open. The overlay then draws no card for it: its modal
+/// card drew the question a second time and took every press, so the
+/// panel's own option buttons answered nothing (an instrument run found
+/// it). The card still asks another app's question, and this one once the
+/// panel is closed; the system agent's questions are never the overlay's.
+#[test]
+fn the_overlay_leaves_the_open_panels_questions_to_the_panel() {
+    use crate::ai_host::app_peers::host_tools::{AgentQuestion, QuestionAnswer, TurnOrigin};
+    use crate::questions::Questions;
+    use super::view::card_question;
+    let ask = |model: &mut Questions, peer: &str, id: &str, origin: TurnOrigin| {
+        let mut q = AgentQuestion::parse(
+            &json!({"question_id": id, "turn_id": format!("turn-{id}"),
+                "questions": [{"question": "Who should see the summary?", "options": [{"label": "Team"}, {"label": "Everyone"}]}]}),
+            "_main:api:octosense#peer",
+        )
+        .unwrap();
+        q.turn_origin = origin;
+        model.requested(peer, None, q, QuestionAnswer::new(|_| {}))
+    };
+    let mut model = Questions::default();
+    let news = ask(&mut model, "card.os.news", "q1", TurnOrigin::Person);
+    let calendar = ask(&mut model, "card.os.calendar", "q2", TurnOrigin::App);
+    ask(&mut model, "card.os.mail", "q3", TurnOrigin::SystemAgent);
+    let card = |model: &Questions, panel: Option<&str>| card_question(model.open_in_apps(), panel).map(|q| q.id);
+    assert_eq!(card(&model, None), Some(news), "no panel open: the card asks the oldest app question");
+    assert_eq!(card(&model, Some("os.news")), Some(calendar), "Ask News is open: News's question is the panel's, Calendar's is still the card's");
+    assert_eq!(card(&model, Some("os.mail")), Some(news), "a panel for another app changes nothing for News");
+    let mut news_only = Questions::default();
+    let only = ask(&mut news_only, "card.os.news", "q4", TurnOrigin::Person);
+    assert_eq!(card(&news_only, Some("os.news")), None, "the open panel is the question's one surface: no modal card over it");
+    assert_eq!(card(&news_only, None), Some(only), "the panel closed: the card asks it again");
 }
 
 #[test]
@@ -658,6 +717,52 @@ fn stop_denies_what_the_stopped_agent_asks() {
     assert_eq!(relay.last().unwrap(), (RequestId("c1".into()), Decision::Deny, "the person stopped the agent's turn".into()));
     assert!(r.is_pending(&RequestId("n1".into())), "Mail's own agent is not stopped");
     assert_eq!(r.sheets().len(), 1);
+}
+
+/// The sheet's "Needs you … Open the sheet" notice names its request, and
+/// the shell withdraws that notification once the request no longer waits,
+/// with its sheet line: after the person's Stop (an instrument run found
+/// the toast still up, pointing at a sheet that was gone), an answer on
+/// the sheet, the turn's own end, or the deadline. Other notices stand on
+/// their own.
+#[test]
+fn a_sheets_notification_is_withdrawn_with_its_line() {
+    let (mut r, _) = router();
+    r.sheet_expiry_s = 600;
+    let own = |id: &str| {
+        let mut q = send(id, json!({"to": "eve@example.org"}));
+        q.caller = Caller::OwnAgent { client: None };
+        q
+    };
+    let Route::Sheet(_) = r.request(send("stopped", json!({"to": "eve@example.org"})), T0) else { panic!() };
+    let Route::Sheet(answered_on) = r.request(own("answered"), T0) else { panic!() };
+    let Route::Sheet(_) = r.request(own("withdrawn"), T0) else { panic!() };
+    let mut late = own("expired");
+    late.received = T0 + 60;
+    let Route::Sheet(_) = r.request(late, T0 + 60) else { panic!() };
+    let mut shown = super::RequestNotices::default();
+    let notices = r.take_notices();
+    assert_eq!(notices.len(), 4, "{notices:?}");
+    for (n, notice) in notices.iter().enumerate() {
+        assert!(notice.title.starts_with("Needs you: ") && notice.body.ends_with("Open the sheet to approve or deny."), "{notice:?}");
+        let request = notice.request.clone().expect("a sheet's notice names its request");
+        shown.record(request, super::Shown { toast: Some(n as u64 + 1), shade: Some(n as u64 + 11) });
+    }
+    let mut withdrawn = |r: &Router| -> Vec<String> { shown.withdrawn(|id| r.is_pending(id)).into_iter().map(|(id, _)| id.0).collect() };
+    assert!(withdrawn(&r).is_empty(), "all four still wait on their sheets");
+    r.stop_agent("calendar", T0 + 1);
+    assert_eq!(withdrawn(&r), ["stopped"], "Stop withdrew the line: its toast goes too");
+    r.answer(answered_on, &RequestId("answered".into()), Answer::Deny, &ApprovalGesture::sheet_tap(), T0 + 2).unwrap();
+    assert_eq!(withdrawn(&r), ["answered"]);
+    assert!(r.withdraw(&RequestId("withdrawn".into()), "the turn ended", T0 + 3));
+    assert_eq!(withdrawn(&r), ["withdrawn"]);
+    r.tick(T0 + 600);
+    assert!(withdrawn(&r).is_empty(), "the last one has a minute left");
+    r.tick(T0 + 660);
+    assert_eq!(withdrawn(&r), ["expired"]);
+    let expired = r.take_notices();
+    assert!(expired.iter().any(|n| n.title.starts_with("Expired: ") && n.request.is_none()), "the expiry notice stands on its own: {expired:?}");
+    assert!(withdrawn(&r).is_empty(), "each is withdrawn once");
 }
 
 // ---------------------------------------------------------------- confirm: app
@@ -888,32 +993,31 @@ fn only_settings_and_the_sheet_make_a_person_gesture() {
 
 // ---------------------------------------------------------------- the relay seam
 
+/// On approvals of its own, never the shell's (`super::with`): those are
+/// the process's, and the tests that run app agents keep their consent
+/// and relay there while this runs.
 #[test]
 fn the_relay_gets_decisions_made_before_it_was_installed() {
-    super::init_memory();
-    let route = super::approval_requested("os.mail", ToolSpec::host("mail.archive").not_auto_approvable(), json!({"id": 1}), Caller::SystemAgent, ctx("g1", Trigger::Person));
-    assert!(matches!(route, Route::Sheet(_)));
-    let (sheet, id) = super::with(|a| {
+    let mut a = super::Approvals::memory();
+    let front = |a: &super::Approvals| {
         let s = a.router.front_sheet().unwrap();
         (s.id, s.lines[0].request.clone())
-    })
-    .unwrap();
-    super::with(|a| a.router.answer(sheet, &id, Answer::Deny, &ApprovalGesture::sheet_tap(), T0)).unwrap().unwrap();
+    };
+    let route = a.approval_requested("os.mail", ToolSpec::host("mail.archive").not_auto_approvable(), json!({"id": 1}), Caller::SystemAgent, ctx("g1", Trigger::Person));
+    assert!(matches!(route, Route::Sheet(_)));
+    let (sheet, id) = front(&a);
+    a.router.answer(sheet, &id, Answer::Deny, &ApprovalGesture::sheet_tap(), T0).unwrap();
     let relay = RecordingRelay::default();
-    super::set_relay(Box::new(relay.clone()));
+    a.set_relay(Box::new(relay.clone()));
     assert_eq!(relay.take(), vec![(RequestId("g1".into()), Decision::Deny, "denied on the sheet".into())]);
     // From now on, straight to it.
-    super::approval_requested("os.mail", ToolSpec::host("mail.archive").not_auto_approvable(), json!({"id": 2}), Caller::SystemAgent, ctx("g2", Trigger::Person));
-    let (sheet, id) = super::with(|a| {
-        let s = a.router.front_sheet().unwrap();
-        (s.id, s.lines[0].request.clone())
-    })
-    .unwrap();
-    super::with(|a| a.router.answer(sheet, &id, Answer::Once, &ApprovalGesture::sheet_tap(), T0)).unwrap().unwrap();
+    a.approval_requested("os.mail", ToolSpec::host("mail.archive").not_auto_approvable(), json!({"id": 2}), Caller::SystemAgent, ctx("g2", Trigger::Person));
+    let (sheet, id) = front(&a);
+    a.router.answer(sheet, &id, Answer::Once, &ApprovalGesture::sheet_tap(), T0).unwrap();
     assert_eq!(relay.take().len(), 1);
     // The AI bus's held `confirm: host` calls come back to the shell, not
     // to the relay: the Terminal's `run` asks the person, never a rule.
-    super::with(|a| a.router.create_rule(&ApprovalGesture::settings_tap(), RuleDraft::everything("terminal", 30), T0)).unwrap().unwrap();
+    a.router.create_rule(&ApprovalGesture::settings_tap(), RuleDraft::everything("terminal", 30), T0).unwrap();
     let held = crate::ai_bus::HeldCall {
         key: "bus:w4:c1".into(),
         app: "terminal".into(),
@@ -922,19 +1026,18 @@ fn the_relay_gets_decisions_made_before_it_was_installed() {
         auto_approvable: false,
         command: true,
     };
-    assert!(matches!(super::bus_requested(&held), Route::Sheet(_)));
-    let (sheet, id, caller, args) = super::with(|a| {
+    assert!(matches!(a.bus_requested(&held), Route::Sheet(_)));
+    let (sheet, id, caller, args) = {
         let s = a.router.front_sheet().unwrap();
         (s.id, s.lines[0].request.clone(), s.lines[0].caller.clone(), s.lines[0].args.join(" "))
-    })
-    .unwrap();
+    };
     assert_eq!(id, RequestId("bus:w4:c1".into()));
     assert_eq!(caller, "The system agent");
     assert_eq!(args, "command (1 line):   1 \u{2502} ls", "a command, one numbered row per line");
-    super::with(|a| a.router.answer(sheet, &id, Answer::Once, &ApprovalGesture::sheet_tap(), T0)).unwrap().unwrap();
+    a.router.answer(sheet, &id, Answer::Once, &ApprovalGesture::sheet_tap(), T0).unwrap();
     assert!(relay.take().is_empty());
-    assert_eq!(super::take_bus_decisions(), vec![(id, Decision::ApproveOnce, "approved on the sheet".into())]);
-    assert!(!super::consent_granted("os.news"), "developer mode is off in tests: nothing is granted");
+    assert_eq!(a.bus.take(), vec![(id, Decision::ApproveOnce, "approved on the sheet".into())]);
+    assert!(!a.consent_granted("os.news"), "developer mode is off in tests: nothing is granted");
 }
 
 /// The module host's gate: the first ask shows the first-use sheet and

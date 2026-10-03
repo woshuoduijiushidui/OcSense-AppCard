@@ -21,7 +21,8 @@
 //! [`contacts::CONTACTS_FILE`] and [`audit::AUDIT_FILE`], all owner-only.
 //!
 //! The shell calls [`init`] at startup, [`tick`] once a second (and shows
-//! [`take_notices`] as notifications), and gives pointer events to
+//! [`take_notices`] as notifications, withdrawing a request's own once it
+//! no longer waits: [`RequestNotices`]), and gives pointer events to
 //! [`pointer`] before anything else while a sheet or the Settings page is
 //! up. The relay calls [`approval_requested`] and installs itself with
 //! [`set_relay`]; an app module registers its own confirmation sheet with
@@ -129,6 +130,31 @@ impl Approvals {
     pub fn consent_granted(&self, app: &str) -> bool {
         self.consent.granted(app, self.router.hooks().grants_all(app))
     }
+    /// The relay's entry point (octos#2567) on these approvals: a call
+    /// needs an approval.
+    pub fn approval_requested(&mut self, app: &str, tool: ToolSpec, args: serde_json::Value, caller: Caller, context: RequestContext) -> Route {
+        self.router.approval_requested(app, tool, args, caller, context)
+    }
+    /// The relay installs itself; decisions made before are handed over
+    /// first.
+    pub fn set_relay(&mut self, mut relay: Box<dyn ApprovalRelay>) {
+        for (id, decision, reason) in self.queue.take() {
+            relay.approval_decided(&id, decision, &reason);
+        }
+        *self.external.lock().unwrap_or_else(|e| e.into_inner()) = Some(relay);
+    }
+    /// The AI bus's held `confirm: host` call as a request like any other.
+    pub fn bus_requested(&mut self, held: &crate::ai_bus::HeldCall) -> Route {
+        let mut tool = ToolSpec::host(&held.tool);
+        tool.auto_approvable = held.auto_approvable;
+        if held.command {
+            tool = tool.command();
+        }
+        let args = serde_json::from_str(&held.args).unwrap_or_else(|_| serde_json::Value::String(held.args.clone()));
+        // The pane is the person's own conversation with the system agent.
+        let context = RequestContext { call_id: held.key.clone(), trigger: Trigger::Person, ..RequestContext::default() };
+        self.approval_requested(&held.app, tool, args, Caller::SystemAgent, context)
+    }
 }
 
 static STATE: Mutex<Option<Approvals>> = Mutex::new(None);
@@ -159,34 +185,23 @@ pub fn now() -> u64 {
 
 // ------------------------------------------------------------ the relay
 
-/// The relay's entry point (octos#2567): a call needs an approval.
+/// The relay's entry point (octos#2567): a call needs an approval
+/// ([`Approvals::approval_requested`] on the shell's approvals).
 pub fn approval_requested(app: &str, tool: ToolSpec, args: serde_json::Value, caller: Caller, context: RequestContext) -> Route {
-    with(|a| a.router.approval_requested(app, tool, args, caller, context)).unwrap_or_else(|| Route::Refused("approvals are not set up".into()))
+    with(|a| a.approval_requested(app, tool, args, caller, context)).unwrap_or_else(|| Route::Refused("approvals are not set up".into()))
 }
 
-/// The relay installs itself; decisions made before are handed over first.
-pub fn set_relay(mut relay: Box<dyn ApprovalRelay>) {
-    with(|a| {
-        for (id, decision, reason) in a.queue.take() {
-            relay.approval_decided(&id, decision, &reason);
-        }
-        *a.external.lock().unwrap_or_else(|e| e.into_inner()) = Some(relay);
-    });
+/// The relay installs itself; decisions made before are handed over first
+/// ([`Approvals::set_relay`] on the shell's approvals).
+pub fn set_relay(relay: Box<dyn ApprovalRelay>) {
+    with(|a| a.set_relay(relay));
 }
 
 /// The AI bus's `confirm: host` calls (`ai_bus::Route::Approval`): each is
 /// a request like any other; the shell drains the answers here and
 /// releases the held call (`AiBus::release`).
 pub fn bus_requested(held: &crate::ai_bus::HeldCall) -> Route {
-    let mut tool = ToolSpec::host(&held.tool);
-    tool.auto_approvable = held.auto_approvable;
-    if held.command {
-        tool = tool.command();
-    }
-    let args = serde_json::from_str(&held.args).unwrap_or_else(|_| serde_json::Value::String(held.args.clone()));
-    // The pane is the person's own conversation with the system agent.
-    let context = RequestContext { call_id: held.key.clone(), trigger: Trigger::Person, ..RequestContext::default() };
-    approval_requested(&held.app, tool, args, Caller::SystemAgent, context)
+    with(|a| a.bus_requested(held)).unwrap_or_else(|| Route::Refused("approvals are not set up".into()))
 }
 
 pub fn take_bus_decisions() -> Vec<(RequestId, Decision, String)> {
@@ -296,6 +311,49 @@ pub fn dismiss_expired(id: &RequestId) {
 pub fn take_notices() -> Vec<Notice> {
     with(|a| a.router.take_notices()).unwrap_or_default()
 }
+
+/// Whether `id` still waits for its answer (on its sheet, or on the
+/// owning app's).
+pub fn is_pending(id: &RequestId) -> bool {
+    with(|a| a.router.is_pending(id)).unwrap_or(false)
+}
+
+/// Where the shell showed one notice: its desktop toast and its phone shade
+/// notification.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Shown {
+    pub toast: Option<u64>,
+    pub shade: Option<u64>,
+}
+
+/// The notifications of the notices that ask the person to answer a request
+/// ([`Notice::request`]: "Needs you: … Open the sheet to approve or
+/// deny."), by that request. The shell withdraws each once its request is
+/// no longer pending, together with its sheet line: after Stop withdrew
+/// the sheet, its toast still said to open it.
+#[derive(Debug, Default)]
+pub struct RequestNotices(Vec<(RequestId, Shown)>);
+
+impl RequestNotices {
+    pub fn record(&mut self, request: RequestId, shown: Shown) {
+        self.0.push((request, shown));
+    }
+
+    /// The notifications of the requests `pending` no longer holds, to
+    /// withdraw now; forgotten here.
+    pub fn withdrawn(&mut self, pending: impl Fn(&RequestId) -> bool) -> Vec<(RequestId, Shown)> {
+        let mut gone = Vec::new();
+        self.0.retain(|(id, shown)| {
+            let keep = pending(id);
+            if !keep {
+                gone.push((id.clone(), *shown));
+            }
+            keep
+        });
+        gone
+    }
+}
+
 pub fn generation() -> u64 {
     with(|a| a.generation()).unwrap_or(0)
 }

@@ -2,7 +2,7 @@
 
 English | [简体中文](README.zh-CN.md)
 
-[OctoSense](https://github.com/OctoSense-org) is an agent shell on top of your operating system: a launcher and apps that look like the ones you know, with one agent behind them. This repository holds all of OctoSense's own code in one place ([ADR 0001](docs/adr/0001-one-octosense-repository.md)): the shell, its services, the first-party system apps, and the three products built from them.
+[OctoSense](https://github.com/OctoSense-org) is an agent shell on top of your operating system: a launcher and apps that look like the ones you know, with a system agent coordinating app agents. This repository holds all of OctoSense's own code in one place ([ADR 0001](docs/adr/0001-one-octosense-repository.md)): the shell, its services, the first-party system apps, and the three products built from them.
 
 | Product | What it is | Where |
 | --- | --- | --- |
@@ -14,9 +14,13 @@ It was OctoSense-Desktop; OctoSense-ROM (retired; merged into this repository) a
 
 > **Building an OctoSense app?** You do not need this repository to build, check or publish one. Start at the [OctoSense-org profile](https://github.com/OctoSense-org)'s reading list: [OctoScript-App-Design-Flow](https://github.com/OctoSense-org/OctoScript-App-Design-Flow) (`AGENTS.md`, then `docs/QUICKSTART.md`) and [OctoSense-App-Hub](https://github.com/OctoSense-org/OctoSense-App-Hub). The system apps in [`apps/`](apps/README.md) are complete examples of the same app shape (`apps/<name>/bundle/`). Build the desktop shell from here only to see your app in a shell before it is published ([PUBLISHING §4](https://github.com/OctoSense-org/OctoScript-App-Design-Flow/blob/main/docs/PUBLISHING.md#4-rehearse-the-store-path-locally)).
 
+## Start with the code walkthrough
+
+New to the codebase? Start with [From an app window to an agent turn](docs/architecture-walkthrough.md). It follows executable entry points, native and script hosting, app data access, human/system conversations, tool routing and the actual Tokio tasks. The [product walkthrough](desktop/docs/code-walkthrough.md) adds desktop, Home, ROM and system-app run recipes.
+
 ## How it fits together
 
-One shell process per device, one octos kernel per shell, and every agent is a session in that kernel. Apps never talk to the kernel: every path into octos goes through the shell, which holds the host connection and the host token, relays every agent tool call to the app that owns the tool, and puts every approval in front of the person. The full picture, with the code paths and what is on `main` versus planned: [docs/architecture.md](docs/architecture.md); the decisions: [ADR 0004](docs/adr/0004-native-apps-hosting-and-peers.md).
+One shell process per device, one octos kernel per shell, and every agent is a session in that kernel. App-agent access goes through the shell broker. The shell holds the host connection and the host token, relays every agent tool call to the app that owns the tool, and routes approvals through developer mode, the person's standing rules or confirmation sheets. The opt-in AppCard prototype accesses the shared kernel service directly, bypassing the app-peer broker, as described below. The full picture, with the code paths and what is on `main` versus planned: [docs/architecture.md](docs/architecture.md); the decisions: [ADR 0004](docs/adr/0004-native-apps-hosting-and-peers.md).
 
 ### Processes and connections
 
@@ -62,7 +66,7 @@ flowchart LR
 </details>
 
 - **The shell** (`crates/shell`, one process) hosts the window manager, the native modules (App Hub, Rinx), App Hub's Card runner (every script app in its own isolate), the system chat, the approval router, the host-tool relay and [`crates/ai-host`](crates/ai-host/README.md), whose [app-peers broker](crates/app-peers/README.md) is the kernel's host connection.
-- **The octos kernel** ([`crates/kernel`](crates/kernel/README.md)) starts on first use: a child process speaking OUP over stdio on the desktop (`OCTOS_APP_CORE_BIN`) and Android (`liboctos.so`), an in-process task on OpenHarmony, none on iOS. It exits with the shell.
+- **The octos kernel** ([`crates/kernel`](crates/kernel/README.md)) starts on first use: a child process speaking OUP over stdio on the desktop (the packaged `octos-kernel` beside the shell, or `OCTOS_APP_CORE_BIN`) and Android (`liboctos.so`), an in-process task on OpenHarmony, none on iOS. It exits with the shell.
 - **Process apps**: on the desktop the Terminal runs as its own process, attached over the shell's hub (frames and the AI bus), in an OS sandbox built from its `native-apps.json` entry (Seatbelt on macOS, Landlock and seccomp on Linux, not yet on Windows). A process app reaches its own agent over the **peer link**; the shell side is on `main`, but the Terminal is not granted an agent, so no process app uses it yet.
 - **External clients**: Talk to Octos (opt-in) lets a web or terminal client use the system conversation with a limited external token: an allowlist of methods, no `peer/*` method, no app agent's session, no host-routed tools.
 
@@ -72,25 +76,38 @@ flowchart LR
 | --- | --- | --- |
 | In-process native module | the same peer link as a process app, through Makepad's `OctosPeer` client (the module host claims the link for the instance that opened it) | on `main`; no module uses it yet |
 | In-process native module (Rinx) | the injected `OctosAppService`: `open_conversation` (the app's conversation with its agent) and `open_context` (a per-client request context, such as a Rinx mini app) | on `main` |
-| Script app, and its cards | `host.request("octos.session.open" / "octos.session.history" / "octos.turn.start" / "octos.turn.interrupt")` to the `octos` host service, for the names its manifest declares; a card's in-card chat (`sys.chat`) through the shell | on `main`, after first-use consent (the shipped gate; `OCTOSENSE_CONTAINED_APPS=1` asks nobody, `0` turns it off). Today's system apps with an agent declare no `octos.*` name: the shell drives their agents |
+| Script app, and its cards | `host.request("octos.session.open" / "octos.session.history" / "octos.turn.start" / "octos.turn.interrupt")` to the `octos` host service, for the names its manifest declares; a card's in-card chat (`sys.chat`) through the shell | on `main`, after first-use consent (the shipped gate; `OCTOSENSE_CONTAINED_APPS=1` skips first-use consent, `0` turns it off). Today's system apps with an agent declare no `octos.*` name: the shell drives their agents |
 | Process app | the peer link on its hub connection (`octos.session.open`, `octos.turn.start`, …), identity stamped by the shell | shell side on `main`; no process app granted an agent yet |
 | The system agent | the kernel's own session `_main:api:octosense#system`, reached from the shell's system chat | on `main` |
 | Talk to Octos client | the system conversation only, with the external token | on `main` |
 
 ### The system agent and the app agents
 
-**The system agent** is the kernel session `_main:api:octosense#system` on the `_main` profile (`crates/kernel/src/network.rs`). It owns every app agent and supervises them. The person talks to it in the shell's **assistant pane**, the system chat (`crates/shell/src/system_chat/`: the dock's Assistant icon, the phone home's Assistant tile or F8; a medium pane at the left on a desktop that moves and resizes and renders Markdown, full screen on a phone), or from a paired Talk to Octos client. Its kernel tools are exactly `SYSTEM_AGENT_TOOLS` (`crates/kernel/src/system_tools.rs`): `peer_send_input`, `peer_gather`, `peer_list` and `peer_respond` to supervise app agents, its workspace's file tools, memory, `ask_user_question`, media viewing, `web_search`, `web_fetch` and `tool_search`. Every kernel start sets that list with octos's `session/tool_list/set`, so octos's own shell, the spawn family and `peer_close` are never offered. The system chat also registers host tools on the session: `agents.list` and `agents.ask` (`crates/shell/src/agents.rs`: which apps have an agent, and the first-use sheet for one), and `terminal.run` while Setup › Assistant › Command execution is on.
+**The system agent** is the kernel session `_main:api:octosense#system` on the `_main` profile (`crates/kernel/src/network.rs`). It owns every app agent and supervises them.
+
+The person talks to it in the shell's **assistant pane**, the system chat (`crates/shell/src/system_chat/`: the dock's Assistant icon, the phone home's Assistant tile or F8; a medium pane at the left on a desktop that moves and resizes and renders Markdown, full screen on a phone), or from a paired Talk to Octos client.
+
+Its kernel tools are exactly `SYSTEM_AGENT_TOOLS` (`crates/kernel/src/system_tools.rs`): `peer_send_input`, `peer_gather`, `peer_list` and `peer_respond` to supervise app agents, its workspace's file tools, memory, `ask_user_question`, media viewing, `web_search`, `web_fetch` and `tool_search`. Every kernel start sets that list with octos's `session/tool_list/set`, so octos's own shell, the spawn family and `peer_close` are never offered.
+
+The system chat also registers host tools on the session: `agents.list` and `agents.ask` (`crates/shell/src/agents.rs`: which apps have an agent, and the first-use sheet and ready-peer wait for one), `terminal.run` while Setup › Assistant › Command execution is on, and the native apps' own read tools their `native-apps.json` entries name (`agent.system_tools`): Calculator's `calculator.eval`, Clock's `clock.now`, Notes' `notes.search` and `notes.read`, Reminders' `reminders.due` and `reminders.list`, Weather's `weather.current`. Such a call reaches the app's open instance (its AI bus service); a closed app answers "Open Notes first".
 
 **An app agent** is one host-owned octos peer per (app, account) ([`crates/app-peers`](crates/app-peers/README.md)). These apps have one on `main` (`crates/shell/src/apps.rs`, `agent_apps`):
 
 | App | Declared by | Its tools (run by) | What it puts on the glance screen |
 | --- | --- | --- | --- |
 | Rinx (native) | `native-apps.json` `agent.octos` (the four `octos.*` services) and `agent.generic_tools` | octos's generic tools in its list; its own assistant UI | – |
-| News (`os.news`) | `apps/news/bundle/tools.json`, the manifest's `agent` block | `news.list`, `news.read` (the `news` host service) | – |
+| News (`os.news`) | `apps/news/bundle/tools.json`, the manifest's `agent` block | `news.list`, `news.read`, `news.notify` (the `news` host service and shell notice callback) | a notice card with a notification |
 | Mail (`os.mail`) | `apps/mail/bundle/tools.json`, the manifest's `agent` block and `glance` | `mail.notify` (the `mail` host service) | a notice card with a notification |
-| Calendar (`os.calendar`, desktop only) | `apps/calendar/bundle/tools.json`, the manifest's `agent` block and `glance` | `calendar.events`, `calendar.add_event`, `calendar.remove_event` (destructive: the person approves it), `calendar.notify`, `calendar.agenda` (the `calendar` host service) | an event card or an agenda card, with a notification |
+| Calendar (`os.calendar`, desktop only) | `apps/calendar/bundle/tools.json`, the manifest's `agent` block and `glance` | `calendar.events`, `calendar.add_event`, `calendar.remove_event` (destructive: enters the approval router), `calendar.notify`, `calendar.agenda` (the `calendar` host service) | an event card or an agenda card, with a notification |
+| Photos, Maps, YouTube; Camera on phone | Their bundle `tools.json`, `agent` block and `glance` | Each app's `<app>.notify` (shell `NoticeService`) | a notice card with a notification |
 
-A script app has an agent when its manifest declares `octos.*` names or an `agent` block (`"tools": ["ask_user_question"]` names the kernel tools it may use), or its bundle ships `tools.json` (each tool `<app>.<tool>` with its schemas, `risk`, `confirm` and `shareable`). Its peer is `card.<app id>`. The person allows the agent once, on the first-use sheet (from the shell's "Ask <app>" panel, the app's own `octos` call or the system agent's `agents.ask`). From then on the shell prepares the peer at startup, with the app's tools registered, so the system agent's `peer_list` shows it. Besides its own tools, an app agent gets the host read tools `files.list`, `files.read` and `files.search` over its account folder. On the phone, which builds `toolbox-peers` by default, it also gets the system toolbox's tools when its manifest asks for `research` or `crawl`, which no app does yet. `AGENT.md`, skills and triggers ([ADR 0002](docs/adr/0002-event-driven-app-agents.md)) are not built: an app agent runs only when the system agent, the person or a card asks it.
+AI providers has no app agent.
+
+A script app has an agent when its manifest declares `octos.*` names or an `agent` block (`"tools": ["ask_user_question"]` names the kernel tools it may use), or its bundle ships `tools.json` (each tool `<app>.<tool>` with its schemas, `risk`, `confirm` and `shareable`). The broker identifies the app as `card.<app id>`; the kernel returns its peer slug during preparation. The person allows the agent once, on the first-use sheet (from the shell's "Ask <app>" panel, the app's own `octos` call or the system agent's `agents.ask`). From then on the shell prepares the peer at startup, with the app's tools registered, so the system agent's `peer_list` shows it.
+
+On Unix, a consented app agent with an available workspace also gets the host read tools `files.list`, `files.read` and `files.search` over its account folder; these do not expose every host-service database. On the phone, which builds `toolbox-peers` by default, it also gets the system toolbox's tools when its manifest asks for `research` or `crawl`, which no app does yet.
+
+`AGENT.md`, skills and triggers ([ADR 0002](docs/adr/0002-event-driven-app-agents.md)) are not built: an app agent runs only when the system agent, the person or a card asks it.
 
 **From the system agent to a card on the glance screen**:
 
@@ -104,7 +121,7 @@ sequenceDiagram
   actor P as Person
   participant S as System agent
   participant B as Shell: app-peers broker
-  participant A as Mail's agent (peer card.os.mail)
+  participant A as Mail's agent (kernel-issued peer)
   participant R as Shell: tool relay
   participant M as Mail's host service
   participant G as Shell: glance service
@@ -115,19 +132,24 @@ sequenceDiagram
   R->>R: grant, consent, schema, budget
   R->>M: run on Mail's host service
   M->>G: glance.publish as os.mail: notice.card, notify
-  G-->>P: notification (a desktop toast, the phone's shade)
+  G-->>P: desktop: a toast and the glance panel; phone: a shade notification
   M-->>R: {card_id}
   R-->>A: peer/tool/result
   A-->>S: the turn's result on the blackboard (peer_gather)
-  P->>G: opens the card, types in its chat
-  G->>A: a turn in the person's lane (sys.chat)
-  A-->>G: the reply, drawn as AI-written
 ```
 
 </details>
 
-- The model never writes card code: `mail.notify`, `calendar.notify` and `calendar.agenda` fill a fixed L0 card the app's host service ships (`apps/mail/host-service/resources/notice.card`, `apps/calendar/host-service/resources/*.card`) and publish it as the app.
-- `mail.notify` and `calendar.add_event` are `act` tools and run without a sheet; octos asks for approval only for destructive and outward tools, which go to the shell's approval router ([below](#a-tool-call-with-an-approval)).
+The model supplies text, never card code. The host fills fixed templates:
+
+- **Notice cards.** Mail, News, Photos and the other `<app>.notify` tools use the shell’s [`notice.card`](crates/shell/resources/glance/notice.card). The shell supplies the app’s icon and name; the call supplies the title and body. Reusing a `card_id` replaces the app’s earlier notice.
+- **Calendar cards.** `calendar.notify` and `calendar.agenda` use Calendar’s [event and agenda templates](apps/calendar/host-service/resources).
+
+Mail and News forward `notify` from their host services to the shell. For apps without their own service, the shell’s [`glance_notice.rs`](crates/shell/src/glance_notice.rs) handles the call directly. In either case, the shell publishes as the app and requires its `glance` grant (`glance::publish_for`).
+
+Pressing one of these cards opens the app. To discuss a Mail notice with Mail’s agent, open “Ask Mail” ([below](#talking-to-an-apps-agent-yourself)). [In-card chat](#in-card-chat) describes the separate chat feature and its current availability.
+
+`mail.notify` and `calendar.add_event` are `act` tools and normally run without a per-call sheet. Destructive and outward calls enter the approval path; the shell’s approval router decides which requests need a person ([below](#a-tool-call-with-an-approval)).
 
 ### One app agent, two lanes
 
@@ -173,8 +195,8 @@ The person is not limited to the system agent: they can talk to any app's own ag
 | Surface | Where it is | How it opens |
 | --- | --- | --- |
 | **"Ask <app>"** (`crates/shell/src/app_chat/`) | A shell panel for every app with an agent, whether or not the app draws a chat of its own: the system chat's pane drawn as the app's conversation (`app_panel: true`). On a desktop it stands right of the system chat, so the two lanes show side by side. | The bar's "Ask <app>" button (shown while the focused window's app has an agent), Shift+F8, or the menu row "Ask this app's agent". With an app without an agent focused, the shell says "No app agent here". On the phone the pane is drawn as a full-screen sheet, but no touch control opens it on `main` yet. |
-| **A card's in-card chat** (`sys.chat`, `crates/shell/src/glance_chat.rs`) | A glance card the app published | The person types in the card's chat. Only the publishing app's own agent answers, and its reply is marked AI-written ([below](#cards-and-questions)). |
-| **The app's own UI** | A native module's `open_conversation`, a script app's `octos.session.open`, a process app's peer link | Inside the app. Rinx draws its own assistant UI; none of the system apps (News, Mail, Calendar) draws a chat, so for them the panel and their cards are the way in. |
+| **A card’s in-card chat** (`sys.chat`, `crates/shell/src/glance_chat.rs`) | A glance card that declares a chat | The person types in the card; the publishing app’s own agent answers, with its reply marked AI-written. See [in-card chat](#in-card-chat) for current availability and the demo. |
+| **The app's own UI** | A native module's `open_conversation`, a script app's `octos.session.open`, a process app's peer link | Inside the app. Rinx draws its own assistant UI; none of the system apps draws a chat, so the “Ask <app>” panel is their current conversation entry. |
 
 How the "Ask <app>" panel behaves:
 
@@ -225,16 +247,42 @@ sequenceDiagram
 </details>
 
 - **Tool calls**: octos sends `peer/tool/call` to the shell's relay (`crates/shell/src/host_tools/`), which checks the grant by (owning app, tool) and caller, the arguments against the tool's schema and the caller's budget, and routes the call to the owning app's executor: an in-process module's, a script app's host service, a process app's peer link, or the Terminal's `run` on the AI bus.
-- **Approvals** go to the approval router (`crates/shell/src/approvals/`): developer mode, then standing rules on (owning app, tool), then a shell-drawn sheet. A `confirm: app` tool is confirmed on the owning app's own sheet, which shows the caller. Only the person approves; the system agent never does.
+- **Approvals** go to `crates/shell/src/approvals/`: external clients retain their prompts; developer mode approves calls for covered apps; `confirm: app` uses the owning app's registered sheet; mandatory live decisions bypass rules; then standing rules may decide, otherwise a shell sheet asks the person. The system agent cannot approve. [The walkthrough](docs/architecture-walkthrough.md#approval-order) gives the complete order, deadlines and audit behavior.
 - **Deadlines and Stop** ([#167](https://github.com/OctoSense-org/OctoSense/pull/167)): an approval or question the shell holds for an app peer expires after 10 minutes (`OCTOSENSE_PROMPT_DEADLINE_SECS`): the router denies it, a question is declined, both stay visible as "Expired: no answer in 10 min". If the turn is still running 30 s later, the broker interrupts it so the next turn can start. The sheets' "Stop <App>'s agent" ends the running turns of both lanes, the person's and the system agent's; the "Ask <app>" panel's Stop ends only the person's own turn ([above](#talking-to-an-apps-agent-yourself)).
 - **External clients' prompts** stay with the client: the shell does not answer or expire approvals of a Talk to Octos client's turns (octos#2624).
 
 ### Cards and questions
 
-- **Glance cards** (`crates/shell/src/glance.rs`): an app with the `glance` capability publishes with `glance.publish` (`glance.withdraw`, `glance.list`), as itself: the shell takes the publisher from the caller, never from the arguments. A card is an L0 `source` filled from `data` (presentation only, checked with Octoscript's L0 checker) or a Splash `script`. Limits: 6 publishes a minute and 4 cards per app, 32 kept, 6 shown by priority, then recency. A card published with `notify` also posts a notification: on a desktop the toast opens that card in its own card window (`glance_sheet.rs`), and the glance panel (`glance_panel.rs`; the bar's bell, F9) opens on every new card; on a phone the shade's notification opens the glance page.
-- **Interactive cards** ([#153](https://github.com/OctoSense-org/OctoSense/pull/153)): an app's glance cards run under the app's own policy, as the app's UI does in the Card runner. What the person does on a card is the app's own action, through the app's capability gate and host services, not an agent tool call, so it needs no extra shell approval.
-- **In-card chat** ([#263](https://github.com/OctoSense-org/OctoSense/pull/263)): an L0 card may declare `sys.chat(app, thread, fields)` and draw `ChatEntry` rows, and show text the model wrote (`class: model-copy`), marked AI-written and never acted on. The transcript is the host's ([`crates/l0-chat`](crates/l0-chat/README.md), `crates/shell/src/glance_chat.rs`): only the publishing app's own agent, only what the person typed is written as theirs, and the agent answers in the person's lane. Threads are kept in the app's account folder (`apps/<app>/accounts/<account>/chat/<thread>.json`).
-- **Questions** (octos's `ask_user_question`) are routed by the turn's trigger: a turn from the person's lane (or the app) asks in the app's conversation, a turn from the system agent's lane asks in the system chat. Only the person answers, on a shell surface.
+#### Publishing and opening cards
+
+An app with the `glance` capability publishes as itself with `glance.publish`; it can also use `glance.withdraw` and `glance.list`. The shell takes the publisher from the caller, never from the arguments. A card is either an L0 `source` filled from `data` (presentation only, checked by Octoscript’s L0 checker) or a Splash `script`.
+
+The limits are 6 publishes per minute and 4 cards per app. The shell keeps 32 cards, ordered by priority, then recency: a phone’s glance page shows the first 6, and the desktop’s panel lists them all. See [`glance.rs`](crates/shell/src/glance.rs).
+
+| Surface | What happens |
+| --- | --- |
+| Desktop panel | A new card opens the glance panel unless a card window is already open. The bar’s bell or F9 also opens the panel. A press on a card outside its own controls opens it in the card window. The hovered card shows its open and dismiss actions, and a card that just came wears an accent mark for a few seconds. A card that does not fit whole peeks in at the end of the list. A card taller than its tile scrolls inside it with the wheel; a card with an in-card chat stays at its newest rows, so its field and the latest exchange stay in view. Opened with F9 (or a press in it), the panel has the keyboard: the arrows move a focus ring from card to card, Return opens the card, Delete dismisses it and Esc closes the panel. |
+| Desktop notification | A card published with `notify` also posts a toast with the app’s icon and name, the card’s title and its `summary` (else the card’s own). Selecting the toast opens the card in its own window. At most three toasts show at once; a “+N more” chip under them shows the rest. While the panel is open, toasts stack to its left. |
+| Desktop dismissal | The hovered card shows a dismiss button: `glance::dismiss` removes the card as if the app had withdrawn it. Clear all dismisses every card. A dismissal can be undone from the toast that reports it, or with ⌘Z while the panel has the keyboard. The panel has a separate close button. |
+| Phone | `notify` posts a shade notification. Selecting it opens the glance page. |
+
+A card that names no theme takes the shell’s light or dark palette. Toasts and the panel slide in; `OCTOSENSE_REDUCE_MOTION=1` keeps them still. The desktop surfaces are implemented in [`glance_panel.rs`](crates/shell/src/glance_panel.rs), [`glance_sheet.rs`](crates/shell/src/glance_sheet.rs) and [`notifications.rs`](crates/shell/src/shell/notifications.rs) (`keep_clear_of`, [#273](https://github.com/OctoSense-org/OctoSense/pull/273)).
+
+#### Interactive cards
+
+A card runs under its app’s own policy, as the app’s UI does in the Card runner. A person’s action on a card passes through the app’s capability gate and host services. It is an app action, so it needs no extra shell approval for an agent tool call ([#153](https://github.com/OctoSense-org/OctoSense/pull/153)).
+
+#### In-card chat
+
+**Current availability:** none of the cards published by app agents on `main` declares a chat. The only shipped card with a chat is [`mail-request.card`](crates/shell/resources/glance/mail-request.card), enabled by `OCTOSENSE_GLANCE_DEMO=mail`; it gives canned replies.
+
+An L0 card can declare `sys.chat(app, thread, fields)` and draw `ChatEntry` rows. It can also display model-written text (`class: model-copy`), which is marked AI-written and never executed as an action ([#263](https://github.com/OctoSense-org/OctoSense/pull/263)).
+
+The host owns the transcript. Only the publishing app’s own agent answers, in the person’s lane, and only text the person typed is recorded as theirs. Threads are stored in `apps/<app>/accounts/<account>/chat/<thread>.json`. See [`crates/l0-chat`](crates/l0-chat/README.md) and [`glance_chat.rs`](crates/shell/src/glance_chat.rs).
+
+#### Questions
+
+Questions (`ask_user_question`) follow the turn’s trigger. A turn from the person’s lane or the app asks in the app’s conversation; a turn from the system agent’s lane asks in the system chat. Only the person answers, on a shell surface.
 
 ## Layout
 
@@ -266,16 +314,16 @@ Pinned exactly once, in the root `Cargo.toml` and the runtime locks:
 | [makepad (OctoSense fork)](https://github.com/OctoSense-org/makepad) | The UI framework and the `cargo-makepad` packager. Checked out in `.sources/makepad`, plus the reviewed runtime patch. |
 | [OctoScript-Makepad](https://github.com/OctoSense-org/OctoScript-Makepad), [OctoScript](https://github.com/OctoSense-org/OctoScript) | The runtime release that names the Makepad and OctoScript revisions (`native-runtime.lock.json`). |
 | [OctoSense-App-Hub](https://github.com/OctoSense-org/OctoSense-App-Hub) | The signed catalog, the store, the Card runner that contains every app (`octosense-app-hub-app`). |
-| [octos](https://github.com/octos-org/octos) | The agent kernel. On Android the APK bundles it as `liboctos.so`; on a desktop the kernel service runs the binary named by `OCTOS_APP_CORE_BIN`. |
+| [octos](https://github.com/octos-org/octos) | The agent kernel. On Android the APK bundles it as `liboctos.so`; on a desktop the kernel service runs the packaged `octos-kernel` beside the shell, checked against this revision (`tools/kernel-artifact.py --host --stage` builds it); `OCTOS_APP_CORE_BIN` overrides it. |
 | [Rinx](https://github.com/hagency-org/Rinx) | Matrix chats and mini apps, hosted as a native module. |
 
 Related, not build inputs: [OctoScript-App-Design-Flow](https://github.com/OctoSense-org/OctoScript-App-Design-Flow) (how apps are built and published), [OctoScript-Android](https://github.com/OctoSense-org/OctoScript-Android) and [OctoScript-OH](https://github.com/OctoSense-org/OctoScript-OH) (other renderers), the [OctoSense website](https://github.com/OctoSense-org/octosense-org.github.io).
 
 ## AI services (octos)
 
-Each shell runs one [octos](https://github.com/octos-org/octos) agent kernel, started on first use: the APK's `liboctos.so` on Android, in process on OpenHarmony, the binary `OCTOS_APP_CORE_BIN` names on a desktop, none on iOS. The person chooses its models and types keys in the **AI providers** system app, on host sheets; keys stay in the platform's secret store and never reach an app. [`crates/ai-host`](crates/ai-host/README.md) is the shells' one entry point, and [`crates/app-peers`](crates/app-peers/README.md) gives each granted native app its own octos peer (private contexts, workspace and memory `app/<app>/acct-<hash>`), owned by the shell's system agent. A peer's tool approvals are answered only by the person, in that app; the system agent cannot answer them.
+Each shell runs one [octos](https://github.com/octos-org/octos) agent kernel, started on first use: the APK's `liboctos.so` on Android, in process on OpenHarmony, on a desktop the packaged `octos-kernel` beside the shell (or the binary `OCTOS_APP_CORE_BIN` names), none on iOS. The person chooses its models and types keys in the **AI providers** system app, on host sheets; keys stay in the platform's secret store and never reach an app. [`crates/ai-host`](crates/ai-host/README.md) is the shells' one entry point, and [`crates/app-peers`](crates/app-peers/README.md) gives each granted native app its own octos peer (private contexts, workspace and memory `app/<app>/acct-<hash>`), owned by the shell's system agent. Peer tool approvals use the shell router: developer mode, eligible standing rules or a person on the owning app/Shell confirmation sheet. The system agent cannot answer them.
 
-What works today: native modules (Rinx) use their peer; AppCard (opt-in) uses the kernel directly. Contained script apps, system or store, reach it through the `octos` host service in a shell that hosts a kernel: each app gets its own host-owned peer (`card.<app id>`), and its tool approvals go to the shell's approval sheets like every other app agent's ([#155](https://github.com/OctoSense-org/OctoSense/pull/155)). The `llm` service manages providers for `os.*` apps only. An app's own agent (`tools.json`, `AGENT.md`, skills, triggers, glance cards) is [ADR 0002](docs/adr/0002-event-driven-app-agents.md); apps' `tools.json` tools reach their agents end to end since [#160](https://github.com/OctoSense-org/OctoSense/pull/160).
+What works today: native modules (Rinx) use their peer; AppCard (opt-in) uses the kernel directly. Contained script apps, system or store, reach it through the `octos` host service in a shell that hosts a kernel: each app gets its own host-owned peer (`card.<app id>`), and its tool approvals go to the shell's approval sheets like every other app agent's ([#155](https://github.com/OctoSense-org/OctoSense/pull/155)). The `llm` service manages providers for `os.*` apps only. An app's own agent (`tools.json`, `AGENT.md`, skills, triggers, glance cards) is [ADR 0002](docs/adr/0002-event-driven-app-agents.md); host-service-backed `tools.json` tools reach their agents through the shell relay since [#160](https://github.com/OctoSense-org/OctoSense/pull/160). Tools marked `implemented_by: "app"` still lack a Card-runner executor; declaring a tool does not implement it.
 
 The architecture, the trust model, what each kind of app can use, the plan with its status, and how to run and test it locally: [docs/ai-services.md](docs/ai-services.md). How it fits into the whole system: [docs/architecture.md](docs/architecture.md). For app developers: OctoScript-App-Design-Flow's [AI-SERVICES](https://github.com/OctoSense-org/OctoScript-App-Design-Flow/blob/main/docs/AI-SERVICES.md).
 
@@ -319,6 +367,8 @@ cargo check --locked -p octosense --features mobile-apps                        
 cargo check --locked -p octosense -p octosense-appcard --features mobile-apps,app-appcard
 ```
 
+The assistant needs the octos kernel beside the shell: `python3 tools/kernel-artifact.py --host --stage target/release` builds the pinned revision and stages it, once per octos pin; the desktop refuses a staged kernel of another revision and says so ([Build and run](desktop/README.md#build-and-run)). Without one the desktop runs without an assistant.
+
 **Phone** (from `phone/`, which selects the phone's system apps; details in [phone/README.md](phone/README.md)):
 
 ```sh
@@ -342,12 +392,13 @@ Path-filtered workflows in `.github/workflows/`, so a change runs only the jobs 
 | `phone.yml` | `phone/`, `crates/`, `apps/`, the workspace files, `tools/` | compiles Home and its bundled modules, the shell graph guards, and runs the tests of the shell, Home, the AI services, App Hub admission and runtime policy on macOS; the longest job |
 | `apps.yml` | `apps/`, `crates/`, the workspace files, `tools/setup.py` | the kernel service, app peers, AI providers config, the Mail and `llm` host services, the shell's AI services (`crates/ai-host`), AppCard |
 | `rom.yml` | `rom/`, `phone/android/`, the phone's Android resources and tests, `tools/kernel-artifact.py` | product tests, the generated Agent Binder client, the web installer |
+| `release-desktop.yml` | a pushed `desktop-v*` tag, a manual run, or a pull request that changes the packaging (build and scan only) | unsigned desktop packages for macOS, Windows and Linux, the private-path scan; for a tag, signing in the `release` environment and a draft release ([desktop/README.md](desktop/README.md#release-builds)). Not run by `tools/ci-local.sh`. |
 
 Each workflow's graph check (`tools/setup.py --check --cargo`) asserts one Makepad, one App Hub, one octos and one Rinx in the locked graph.
 
 ## Releases
 
-ADR 0001 tags each product on its own: `desktop-v*`, `home-v*` (APK), `rom-v*` (image), with build receipts that record the repository commit. System apps ship only inside the shells, admitted by digest; they are not released separately. The ROM release published before the merge, `20260919-j`, is here as [`rom-v20260919-j`](https://github.com/OctoSense-org/OctoSense/releases/tag/rom-v20260919-j). Phones read `update.json` from the moving `rom-latest` release, not from `releases/latest` ([rom/docs/updates.md](rom/docs/updates.md)). Images `20260919-j` and earlier check the retired OctoSense-ROM repository instead, so a phone flashed with one must be reflashed once to receive updates over the air.
+ADR 0001 tags each product on its own: `desktop-v*`, `home-v*` (APK), `rom-v*` (image), with build receipts that record the repository commit. A `desktop-v*` tag builds the desktop packages (`.dmg`, Windows installer, `.deb`, `.AppImage`) into a draft release ([Release builds](desktop/README.md#release-builds)). System apps ship only inside the shells, admitted by digest; they are not released separately. The ROM release published before the merge, `20260919-j`, is here as [`rom-v20260919-j`](https://github.com/OctoSense-org/OctoSense/releases/tag/rom-v20260919-j). Phones read `update.json` from the moving `rom-latest` release, not from `releases/latest` ([rom/docs/updates.md](rom/docs/updates.md)). Images `20260919-j` and earlier check the retired OctoSense-ROM repository instead, so a phone flashed with one must be reflashed once to receive updates over the air.
 
 ## Contributing
 

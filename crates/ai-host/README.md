@@ -45,7 +45,8 @@ ai_host::shutdown();
 ```
 
 `Host` fields: `data_dir`; `kernel: KernelSource` (`Bundled` on Android,
-`InProcess` on OpenHarmony, `Env` = `$OCTOS_APP_CORE_BIN` on a desktop,
+`InProcess` on OpenHarmony, `Env` = `$OCTOS_APP_CORE_BIN` or the packaged
+`octos-kernel` on a desktop,
 `Program(path)`, `None`; `KernelSource::platform()` picks); `qr_import:
 QrImport` (`platform()` or `paste_only()`); `policy: Policy`
 (`Policy::shipped()` grants Rinx the `octos.*` services).
@@ -110,7 +111,7 @@ only the toolbox's part (`src/toolbox_peers.rs`, over `crates/toolbox`'s
   scope in octos's `Scope` shape under the top-level `research` object, App
   Hub #26's shape) is, **temporarily**, granted only to system apps (`os.*`)
   until the host reads App Hub's verified grant. The shells' App Hub pin
-  (`58c3c8ae`) already includes #26; the code still keeps the `os.*` gate
+  (`0d5b47a2`) already includes #26; the code still keeps the `os.*` gate
   (`system_app_only`). No system app declares `research` or `crawl` yet.
 - `ToolboxExecutor`: the relay's executor for the `toolbox` owner. It checks
   the calling app's grant again (a forged `toolbox.deep_crawl` is

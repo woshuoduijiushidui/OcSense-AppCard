@@ -25,7 +25,7 @@
 | A system app's agent: its tools and the cards they publish | `apps/<name>/bundle/tools.json` and the manifest's `agent` block; the tools run on the app's host service | its host service's tests (below); then in a shell, with the system agent asking the app's agent |
 | A host service (`mail`, `calendar`, `news`, `llm`, `model`) | `apps/mail/host-service/`, `apps/calendar/host-service/`, `apps/news/host-service/`, `apps/ai-providers/` (`llm` and `model.complete`) | `cargo test --locked -p octosense-mail-service -p octosense-calendar-service -p octosense-news-service -p octosense-llm-service` |
 | AppCard (opt-in) | `apps/appcard/` | [apps/appcard/AGENTS.md](apps/appcard/AGENTS.md), `apps.yml` |
-| A native app (App Hub, Rinx, Terminal, Sheets, Reference, AppCard): its crate, pin, features, hosting per target, sandbox, storage and agent grants | `native-apps.json` only; `python3 tools/native_apps.py` writes the marked blocks in the `Cargo.toml`s, `crates/shell/src/native_apps.rs` and `Cargo.lock` | `python3 tools/native_apps.py --check`, `python3 -m unittest discover -s tools -p 'test_*.py'` |
+| A native app (App Hub, Rinx, Terminal, Sheets, Reference, AppCard, and the Makepad apps made native: Calculator, Clock, Notes, Reminders, Weather, and Task, which runs only as its own process): its crate, pin, features, hosting per target, sandbox, storage, its tools and which of them the system agent may call (`agent.system_tools`) | `native-apps.json` only; `python3 tools/native_apps.py` writes the marked blocks in the `Cargo.toml`s, `crates/shell/src/native_apps.rs` and `Cargo.lock` | `python3 tools/native_apps.py --check`, `python3 -m unittest discover -s tools -p 'test_*.py'` |
 | An external pin (Makepad, OctoScript, App Hub, octos, Rinx) | root `Cargo.toml` `[workspace.dependencies]` (a native app's in `native-apps.json`), `native-runtime.lock.json`, `runtime-patches.lock.json` | `python3 tools/setup.py --update`, then `--check --cargo` and `python3 tools/native_apps.py --check` |
 | A decision | `docs/adr/` (next free number) | — |
 
@@ -49,3 +49,13 @@ On a machine that already has clones of Makepad, OctoScript or Octoscript-Makepa
 8. **Commit with a public identity.** Author and committer are your GitHub noreply address (for the maintainer, `ymote <151983+ymote@users.noreply.github.com>`) or another address you mean to publish; never a work or machine-local address. Check `git config user.email` before the first commit in a clone: a repository-local identity on a shared machine leaked a work address into this project's history once, and removing it took a history rewrite.
 9. **Keep docs honest and bilingual.** Every command in a doc was run; anything not run is marked **unverified**. User-facing docs are `README.md` plus `README.zh-CN.md`, linked by the single switcher line under the title (`English | [简体中文](README.zh-CN.md)`), and change together. `AGENTS.md` files are English only.
 10. **Keep signing keys, keystores, tokens and personal paths out of the repository.** `rom/tests/test_no_local_paths.py` checks for local paths.
+
+## Architecture documentation and code walkthroughs
+
+Start with the [architecture walkthrough](docs/architecture-walkthrough.md) and [product walkthrough](desktop/docs/code-walkthrough.md), then follow the source symbols. Update English/Chinese guides and README entry points together when changing a boundary.
+
+- For hosting changes, document the module/process/Splash/card loader and its identity source in `module_host`, `peer_link`, or App Hub's runner.
+- For agent changes, trace `contract.rs` → `broker.rs` → the owning executor. Describe the peer/account identity, system session and human context separately from their runtime tasks.
+- For a new tool, update its manifest, `tools.json`, admission offer, caller grant and executable handler. Show which host service or workspace owns its data and how approval reaches the router.
+- Read external code at the Cargo/runtime pins. Use current `desktop/`, `phone/`, `rom/` and `apps/` paths when writing product instructions.
+- Record test execution in the PR: distinguish unit/scripted connectors from optional real-kernel tests that return early without a binary. Mark unrun launch/device recipes unverified.

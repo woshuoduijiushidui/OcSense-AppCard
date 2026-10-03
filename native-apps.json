@@ -41,7 +41,7 @@
     {
       "id": "sheets",
       "crate": "makepad-sheets",
-      "source": { "git": "https://github.com/OctoSense-org/makepad.git", "rev": "e29a0eaa68781231eb9ec582e5f02648c6dad7e9", "local": ".sources/makepad/apps/sheets" },
+      "source": { "git": "https://github.com/OctoSense-org/makepad.git", "rev": "c155f61d0e1600d2ec474209374444a38a09a470", "local": ".sources/makepad/apps/sheets" },
       "module": "makepad_sheets::SHEETS_MODULE",
       "bin": "sheets",
       "bin_features": ["standalone"],
@@ -58,7 +58,7 @@
     {
       "id": "terminal",
       "crate": "makepad-terminal",
-      "source": { "git": "https://github.com/OctoSense-org/makepad.git", "rev": "e29a0eaa68781231eb9ec582e5f02648c6dad7e9", "local": ".sources/makepad/apps/terminal" },
+      "source": { "git": "https://github.com/OctoSense-org/makepad.git", "rev": "c155f61d0e1600d2ec474209374444a38a09a470", "local": ".sources/makepad/apps/terminal" },
       "module": "makepad_terminal::TERMINAL_MODULE",
       "bin": "terminal",
       "default_features": true,
@@ -99,7 +99,7 @@
       "id": "apphub",
       "feature": "app-hub",
       "crate": "octosense-app-hub-app",
-      "source": { "git": "https://github.com/OctoSense-org/OctoSense-App-Hub", "rev": "58c3c8aed8fc811a16d67c5f784a8a44214ff876", "local": null },
+      "source": { "git": "https://github.com/OctoSense-org/OctoSense-App-Hub", "rev": "0d5b47a2ae9eb98020feca26b7c895a3cf797dc1", "local": null },
       "module": ["octosense_app_hub_app::APP_HUB_MODULE", "octosense_app_hub_app::CARD_MODULE"],
       "bin": null,
       "default_features": true,
@@ -109,6 +109,139 @@
       "shells": { "desktop": "default", "phone": "default" },
       "native_mobile": "always",
       "sandbox": { "network": "any", "processes": false },
+      "storage": { "accounts": false, "agent_workspace": "none", "external": [] },
+      "agent": { "octos": [], "tools": null }
+    },
+    {
+      "id": "calculator",
+      "crate": "makepad-calculator",
+      "source": { "git": "https://github.com/OctoSense-org/makepad.git", "rev": "c155f61d0e1600d2ec474209374444a38a09a470", "local": ".sources/makepad/apps/calculator" },
+      "module": "makepad_calculator::CALCULATOR_MODULE",
+      "bin": "calculator",
+      "bin_features": ["standalone"],
+      "default_features": false,
+      "crate_features": [],
+      "implies": [],
+      "hosting": { "macos": "module", "windows": "module", "linux": "module", "android": "module", "ios": "module", "ohos": "module" },
+      "shells": { "desktop": "default", "phone": "off" },
+      "native_mobile": "feature",
+      "sandbox": { "network": "none", "processes": false },
+      "storage": { "accounts": false, "agent_workspace": "none", "external": [] },
+      "agent": {
+        "octos": ["octos.session.open", "octos.session.history", "octos.turn.start", "octos.turn.interrupt"],
+        "tools": [
+          {"name": "calculator.eval", "description": "Evaluate an expression. Uses the on-screen angle mode. Does not change the calculation, memory, or history.", "input_schema": {"type": "object", "properties": {"expression": {"type": "string", "maxLength": 1024}}, "required": ["expression"], "additionalProperties": false}, "risk": "read", "shareable": true}
+        ],
+        "system_tools": ["calculator.eval"]
+      }
+    },
+    {
+      "id": "clock",
+      "crate": "makepad-clock",
+      "source": { "git": "https://github.com/OctoSense-org/makepad.git", "rev": "c155f61d0e1600d2ec474209374444a38a09a470", "local": ".sources/makepad/apps/clock" },
+      "module": "makepad_clock::CLOCK_MODULE",
+      "bin": "clock",
+      "bin_features": ["standalone"],
+      "default_features": false,
+      "crate_features": [],
+      "implies": [],
+      "hosting": { "macos": "module", "windows": "module", "linux": "module", "android": "module", "ios": "module", "ohos": "module" },
+      "shells": { "desktop": "default", "phone": "off" },
+      "native_mobile": "feature",
+      "sandbox": { "network": "none", "processes": false },
+      "storage": { "accounts": false, "agent_workspace": "none", "external": [] },
+      "agent": {
+        "octos": ["octos.session.open", "octos.session.history", "octos.turn.start", "octos.turn.interrupt"],
+        "tools": [
+          {"name": "clock.now", "description": "The current local time and date, the next alarm, and any running timer or stopwatch.", "input_schema": {"type": "object", "properties": {}}, "risk": "read", "shareable": true}
+        ],
+        "system_tools": ["clock.now"]
+      }
+    },
+    {
+      "id": "notes",
+      "crate": "makepad-notes",
+      "source": { "git": "https://github.com/OctoSense-org/makepad.git", "rev": "c155f61d0e1600d2ec474209374444a38a09a470", "local": ".sources/makepad/apps/notes" },
+      "module": "makepad_notes::NOTES_MODULE",
+      "bin": "notes",
+      "bin_features": ["standalone"],
+      "default_features": false,
+      "crate_features": [],
+      "implies": [],
+      "hosting": { "macos": "module", "windows": "module", "linux": "module", "android": "module", "ios": "module", "ohos": "module" },
+      "shells": { "desktop": "default", "phone": "off" },
+      "native_mobile": "feature",
+      "sandbox": { "network": "none", "processes": false },
+      "storage": { "accounts": false, "agent_workspace": "none", "external": [] },
+      "agent": {
+        "octos": ["octos.session.open", "octos.session.history", "octos.turn.start", "octos.turn.interrupt"],
+        "tools": [
+          {"name": "notes.search", "description": "Find active notes whose title or body contains the query. Answers id, title, preview, folder, edited_ms and pinned.", "input_schema": {"type": "object", "properties": {"query": {"type": "string", "description": "text to find"}}, "required": ["query"]}, "risk": "read", "shareable": true},
+          {"name": "notes.read", "description": "Read one active note by id: folder, title, complete source, timestamps and pinned state.", "input_schema": {"type": "object", "properties": {"id": {"type": "string", "description": "note id such as n000001"}}, "required": ["id"]}, "risk": "read", "shareable": true}
+        ],
+        "system_tools": ["notes.search", "notes.read"]
+      }
+    },
+    {
+      "id": "reminders",
+      "crate": "makepad-reminders",
+      "source": { "git": "https://github.com/OctoSense-org/makepad.git", "rev": "c155f61d0e1600d2ec474209374444a38a09a470", "local": ".sources/makepad/apps/reminders" },
+      "module": "makepad_reminders::REMINDERS_MODULE",
+      "bin": "reminders",
+      "bin_features": ["standalone"],
+      "default_features": false,
+      "crate_features": [],
+      "implies": [],
+      "hosting": { "macos": "module", "windows": "module", "linux": "module", "android": "module", "ios": "module", "ohos": "module" },
+      "shells": { "desktop": "default", "phone": "off" },
+      "native_mobile": "feature",
+      "sandbox": { "network": "none", "processes": false },
+      "storage": { "accounts": false, "agent_workspace": "none", "external": [] },
+      "agent": {
+        "octos": ["octos.session.open", "octos.session.history", "octos.turn.start", "octos.turn.interrupt"],
+        "tools": [
+          {"name": "reminders.due", "description": "Incomplete dated reminders due before today plus N days, including overdue items and today.", "input_schema": {"type": "object", "properties": {"days": {"type": "integer", "minimum": 1, "maximum": 31}}, "required": ["days"], "additionalProperties": false}, "risk": "read", "shareable": true},
+          {"name": "reminders.list", "description": "Reminders in a smart list or personal list, using the same projection as the UI.", "input_schema": {"type": "object", "properties": {"name": {"type": "string", "minLength": 1, "maxLength": 64}}, "required": ["name"], "additionalProperties": false}, "risk": "read", "shareable": true}
+        ],
+        "system_tools": ["reminders.due", "reminders.list"]
+      }
+    },
+    {
+      "id": "weather",
+      "crate": "makepad-weather",
+      "source": { "git": "https://github.com/OctoSense-org/makepad.git", "rev": "c155f61d0e1600d2ec474209374444a38a09a470", "local": ".sources/makepad/apps/weather" },
+      "module": "makepad_weather::WEATHER_MODULE",
+      "bin": "weather",
+      "bin_features": ["standalone"],
+      "default_features": false,
+      "crate_features": [],
+      "implies": [],
+      "hosting": { "macos": "module", "windows": "module", "linux": "module", "android": "module", "ios": "module", "ohos": "module" },
+      "shells": { "desktop": "default", "phone": "off" },
+      "native_mobile": "feature",
+      "sandbox": { "network": "any", "processes": false },
+      "storage": { "accounts": false, "agent_workspace": "none", "external": [] },
+      "agent": {
+        "octos": ["octos.session.open", "octos.session.history", "octos.turn.start", "octos.turn.interrupt"],
+        "tools": [
+          {"name": "weather.current", "description": "Current conditions and the 5-day forecast for the city selected on screen.", "input_schema": {"type": "object", "properties": {}}, "risk": "read", "shareable": true}
+        ],
+        "system_tools": ["weather.current"]
+      }
+    },
+    {
+      "id": "task",
+      "crate": "makepad-task",
+      "source": { "git": "https://github.com/OctoSense-org/makepad.git", "rev": "c155f61d0e1600d2ec474209374444a38a09a470", "local": ".sources/makepad/apps/task" },
+      "module": null,
+      "bin": "task",
+      "default_features": true,
+      "crate_features": [],
+      "implies": [],
+      "hosting": { "macos": "process", "windows": "process", "linux": "process-if-vulkan", "android": "none", "ios": "none", "ohos": "none" },
+      "shells": { "desktop": "off", "phone": "off" },
+      "native_mobile": "feature",
+      "sandbox": { "network": "none", "processes": true },
       "storage": { "accounts": false, "agent_workspace": "none", "external": [] },
       "agent": { "octos": [], "tools": null }
     }

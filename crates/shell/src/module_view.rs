@@ -88,6 +88,10 @@ pub struct MpModuleView {
     /// The WM's focus is on this tile: keys reach the root.
     #[rust]
     focused: bool,
+    /// One of the app's widgets took the last hover the root was handed
+    /// (`hover_claim`): it holds the hover until a move tells it otherwise.
+    #[rust]
+    hovered: bool,
     /// The root has drawn at least once.
     #[rust]
     drawn: bool,
@@ -105,9 +109,6 @@ pub struct MpModuleView {
     /// the line the tile shows once the shell has named the app.
     #[rust]
     stopped: Option<String>,
-    /// Where the Restart button was drawn.
-    #[rust]
-    restart_rect: Option<Rect>,
     /// Out of sight on the phone (`set_asleep`): the app gets no frames and
     /// its redraws are held, but timers, network replies and messages
     /// still reach it, so its state stays current (and audio keeps
@@ -153,7 +154,6 @@ impl MpModuleView {
         self.vm_id = vm_id;
         self.drawn = false;
         self.stopped = None;
-        self.restart_rect = None;
         self.draw_bg.redraw(cx);
     }
 
@@ -179,13 +179,17 @@ impl MpModuleView {
             }
         }
         self.focused = false;
+        self.hovered = false;
         if self.stopped.is_none() {
             self.stopped = Some("The app stopped after an error".to_string());
         }
         self.draw_bg.redraw(cx);
     }
 
-    /// The closed face: a line and a Restart button, centred.
+    /// The closed face: a line and a Restart button, centred. The face's
+    /// turtle centres them as it ends, which moves the button after it was
+    /// walked, so a press is tested against the drawn button (`on_restart`),
+    /// not the rect `walk_turtle` gave: that one is at the face's top left.
     fn draw_stopped(&mut self, cx: &mut Cx2d, rect: Rect) {
         let Some(line) = self.stopped.clone() else { return };
         let ground = self.draw_bg.color;
@@ -198,12 +202,34 @@ impl MpModuleView {
         cx.begin_turtle(Walk::abs_rect(button), Layout { align: Align { x: 0.5, y: 0.5 }, ..Layout::default() });
         self.draw_button_text.draw_walk(cx, Walk::fit(), Align::default(), "Restart");
         cx.end_turtle();
-        self.restart_rect = Some(button);
         cx.end_turtle();
     }
 
-    /// A press on the closed face: Restart, or just focus the tile.
+    /// The press at `abs` is on the Restart button, where it is drawn: the
+    /// face hit-tests it by its own area, as any widget is hit-tested, so it
+    /// follows the face's centring and whatever clips the window.
+    fn on_restart(&self, cx: &Cx, abs: Vec2d) -> bool {
+        let button = self.draw_button.area();
+        button.is_valid(cx) && button.clipped_rect(cx).contains(abs)
+    }
+
+    /// A press on the closed face: Restart, or just focus the tile. The face
+    /// takes presses as the live tile does: only one inside it that nothing
+    /// in front claimed, and it claims what it takes, so a click on a window
+    /// over it never restarts the app and a click on it raises no window
+    /// behind it. It claims a hover inside it the same way, so nothing behind
+    /// it lights up under the face.
     fn handle_stopped_event(&mut self, cx: &mut Cx, event: &Event) {
+        let rect = self.area.is_valid(cx).then(|| self.area.rect(cx));
+        if let Some((claim, abs)) = hover_claim(cx, event) {
+            if claim.get().is_empty() && rect.is_some_and(|r| r.contains(abs)) {
+                claim.set(self.area);
+            }
+            return;
+        }
+        if pointer_start(event, rect) != PointerStart::Inside {
+            return;
+        }
         let abs = match event {
             Event::MouseDown(e) => Some(e.abs),
             Event::TouchUpdate(update) => update.touches.iter()
@@ -211,10 +237,14 @@ impl MpModuleView {
                 .map(|point| point.abs),
             _ => None,
         };
-        let (Some(abs), Some(client)) = (abs, self.client) else { return };
-        if self.restart_rect.is_some_and(|r| r.contains(abs)) {
+        let (Some(abs), Some(claim), Some(client)) = (abs, press_claim(event), self.client) else { return };
+        if !claim.get().is_empty() {
+            return;
+        }
+        claim.set(self.area);
+        if self.on_restart(cx, abs) {
             cx.widget_action(self.uid, MpRunViewAction::Restart { client });
-        } else if self.area.is_valid(cx) && self.area.rect(cx).contains(abs) {
+        } else {
             cx.widget_action(self.uid, MpRunViewAction::Clicked { client });
         }
     }
@@ -225,11 +255,19 @@ impl MpModuleView {
     pub fn clear_root(&mut self, cx: &mut Cx) {
         self.root = None;
         self.focused = false;
+        self.hovered = false;
         self.draw_bg.redraw(cx);
     }
 
     pub fn root(&self) -> Option<WidgetRef> {
         self.root.clone()
+    }
+
+    /// Where the closed face drew its Restart (module_input_tests.rs).
+    #[cfg(test)]
+    pub(crate) fn restart_button(&self, cx: &Cx) -> Option<Rect> {
+        let button = self.draw_button.area();
+        button.is_valid(cx).then(|| button.rect(cx))
     }
 }
 
@@ -321,17 +359,30 @@ fn pointer_start(event: &Event, rect: Option<Rect>) -> PointerStart {
     }
 }
 
-/// The claim cell of a press or new touch no tile in front has taken yet
-/// (a wheel step has none: it raises nothing).
-fn unclaimed_press(event: &Event) -> Option<&std::cell::Cell<Area>> {
-    let handled = match event {
-        Event::MouseDown(e) => &e.handled,
-        Event::TouchUpdate(update) => &update.touches.iter()
-            .find(|point| point.state == makepad_platform::event::TouchState::Start)?
-            .handled,
-        _ => return None,
-    };
-    handled.get().is_empty().then_some(handled)
+/// The cell that records who claimed a press or a new touch (a wheel step
+/// has none: it raises nothing). Tiles see input topmost first (desk.rs),
+/// after the shell's own surfaces over the desk, so a press that reaches a
+/// tile already claimed was taken by something in front of it.
+fn press_claim(event: &Event) -> Option<&std::cell::Cell<Area>> {
+    match event {
+        Event::MouseDown(e) => Some(&e.handled),
+        Event::TouchUpdate(update) => update.touches.iter()
+            .find(|point| point.state == makepad_platform::event::TouchState::Start)
+            .map(|point| &point.handled),
+        _ => None,
+    }
+}
+
+/// A hover: a mouse move with no button held, with the cell that records
+/// who took it and where it is. Like a press, a hover that reaches a tile
+/// already claimed was taken in front of it. A move with a button held is
+/// no hover: it belongs to whatever captured the press, and passes wherever
+/// it goes.
+fn hover_claim<'a>(cx: &Cx, event: &'a Event) -> Option<(&'a std::cell::Cell<Area>, Vec2d)> {
+    match event {
+        Event::MouseMove(e) if cx.fingers.first_mouse_button.is_none() => Some((&e.handled, e.abs)),
+        _ => None,
+    }
 }
 
 impl Widget for MpModuleView {
@@ -396,11 +447,33 @@ impl Widget for MpModuleView {
         if start == PointerStart::Outside {
             return;
         }
-        // A press inside, with the cell that records who claimed it. Tiles
-        // see input topmost first (desk.rs), so a claimed press belongs to a
-        // tile in front: overlapping windows of one app (its extra windows)
-        // must not raise the one behind.
-        let press = if start == PointerStart::Inside { unclaimed_press(event) } else { None };
+        // A press inside, with the cell that records who claimed it. One that
+        // is claimed already was taken in front of this tile (`press_claim`):
+        // by a window over it, this app's own extra windows included, or by
+        // a shell surface. Like a press outside, it is not this instance's:
+        // it raises nothing, and the root never sees it. The claim alone
+        // would not keep it from the app's widgets. Makepad lets a widget
+        // co-capture a press another area has claimed
+        // (`hits_with_capture_overload`: GestureView's taps, a list's drag, a
+        // View's `on_item_tap`), and GestureView follows new touches from
+        // the raw stream, so a click on Mail's inbox footer opened the News
+        // story under it.
+        let press = if start == PointerStart::Inside { press_claim(event) } else { None };
+        if press.is_some_and(|claim| !claim.get().is_empty()) {
+            return;
+        }
+        // A hover inside, with its claim (`hover_claim`). One a window in
+        // front took is not this instance's either: the root never sees it,
+        // so no widget under that window lights up or sets its cursor. The
+        // one exception: while a widget of this app still holds the hover
+        // from the last move (`hovered`), the root gets this move too, so
+        // that widget sees its hover end. Claimed, the move lets no other
+        // hover start.
+        let hover = hover_claim(cx, event).map(|(claim, abs)| (claim, rect.is_some_and(|r| r.contains(abs))));
+        if hover.is_some_and(|(claim, inside)| inside && !claim.get().is_empty() && !self.hovered) {
+            return;
+        }
+        let hover_unclaimed = hover.is_some_and(|(claim, _)| claim.get().is_empty());
         if press.is_some() {
             if let Some(client) = self.client {
                 // The WM moves focus here (and back to us through
@@ -432,10 +505,23 @@ impl Widget for MpModuleView {
             }
         }
         // A press inside this tile is this tile's, even where none of the
-        // app's widgets took it, so no window behind reacts to it.
+        // app's widgets took it. Claimed, it reaches no window behind: a
+        // module tile lets it by (above), a process tile's `event.hits`
+        // misses it.
         if let Some(handled) = press {
             if handled.get().is_empty() {
                 handled.set(self.area);
+            }
+        }
+        // A hover inside this tile is the tile's in the same way. Before, no
+        // tile claimed a move, so a hover over the part of Mail that takes
+        // none reached News behind it unclaimed: its widgets lit up and set
+        // their cursors under Mail. A process tile's `event.hits` claims
+        // hovers too.
+        if let Some((claim, inside)) = hover {
+            self.hovered = hover_unclaimed && !claim.get().is_empty();
+            if inside && claim.get().is_empty() {
+                claim.set(self.area);
             }
         }
     }
@@ -554,13 +640,35 @@ mod tests {
         assert_eq!(pointer_start(&Event::Startup, tile()), PointerStart::None);
     }
 
-    /// A new touch is a press this tile may claim; the rest of its stroke
-    /// and a frame are not. (A press a window in front already claimed has
-    /// a non-empty cell and raises nothing behind it.)
+    /// A new touch is a press with a claim; the rest of its stroke and a
+    /// frame are not. (A press a window in front already claimed has a
+    /// non-empty cell: the tile behind lets it by, module_input_tests.rs.)
     #[test]
     fn only_a_new_touch_or_button_is_a_press_to_claim() {
-        assert!(unclaimed_press(&touch(dvec2(200.0, 400.0), TouchState::Start)).is_some());
-        assert!(unclaimed_press(&touch(dvec2(200.0, 400.0), TouchState::Move)).is_none(), "only a start is a press");
-        assert!(unclaimed_press(&Event::Startup).is_none());
+        assert!(press_claim(&touch(dvec2(200.0, 400.0), TouchState::Start)).is_some());
+        assert!(press_claim(&touch(dvec2(200.0, 400.0), TouchState::Move)).is_none(), "only a start is a press");
+        assert!(press_claim(&Event::Startup).is_none());
+    }
+
+    /// A mouse move with no button held is a hover with a claim. With a
+    /// button held it is a drag, which passes to whatever captured the press;
+    /// a finger's move is no hover either.
+    #[test]
+    fn only_a_mouse_move_with_no_button_held_is_a_hover_to_claim() {
+        let mut cx = Cx::new(Box::new(|_, _| {}));
+        let at = dvec2(200.0, 400.0);
+        let moved = Event::MouseMove(MouseMoveEvent {
+            abs: at,
+            lock_delta: Vec2d::default(),
+            window_id: WindowId(0, 0),
+            modifiers: Default::default(),
+            time: 0.0,
+            handled: Default::default(),
+        });
+        assert!(hover_claim(&cx, &moved).is_some_and(|(_, abs)| abs == at));
+        assert!(hover_claim(&cx, &touch(at, TouchState::Move)).is_none());
+        assert!(hover_claim(&cx, &Event::Startup).is_none());
+        cx.fingers.first_mouse_button = Some((MouseButton::PRIMARY, WindowId(0, 0)));
+        assert!(hover_claim(&cx, &moved).is_none(), "a drag is no hover");
     }
 }

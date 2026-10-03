@@ -26,10 +26,12 @@
 //! when the peer's `generic_tools` lists it.
 //!
 //! **Consumers.** The system chat subscribes and shows its questions in
-//! its conversation (`crate::system_chat`); the shell's app-conversation
-//! surface (the approvals overlay, `crate::approvals::view`) shows the
-//! app's. Notification and glance cards can subscribe the same way; none
-//! of them owns a question, and none renders anything here.
+//! its conversation (`crate::system_chat`). An app's are shown in its "Ask
+//! <app>" panel (`crate::app_chat`) while that is open, and otherwise on
+//! the shell's app-conversation surface (the approvals overlay's card,
+//! `crate::approvals::view`): one surface at a time. Notification and
+//! glance cards can subscribe the same way; none of them owns a question,
+//! and none renders anything here.
 //!
 //! **Only the person answers, only through the shell.** The one answer
 //! path is [`answer`], which needs a [`PersonAnswer`]: made only by the
@@ -126,11 +128,16 @@ impl Request {
     pub fn answer_count(&self) -> usize {
         self.items.len().max(1)
     }
-    /// "Rinx's agent asks", for a surface's heading.
+    /// "Rinx's agent asks", for a surface's heading: "(for the assistant)"
+    /// in the system agent's lane, "(for you)" from the person's own surface
+    /// (the "Ask <app>" panel, a card's chat:
+    /// [`crate::approvals::sheet::persons_surface`]), else the client's name
+    /// ("(weather)", a Rinx mini app). Never the shell's internal instance id.
     pub fn asked_by(&self) -> String {
         let app = crate::approvals::sheet::app_label(&self.app);
         match (&self.origin, &self.client) {
             (Origin::SystemAgent, _) => format!("{app}'s agent asks (for the assistant)"),
+            (_, Some(client)) if crate::approvals::sheet::persons_surface(client) => format!("{app}'s agent asks (for you)"),
             (_, Some(client)) => format!("{app}'s agent asks ({client})"),
             _ => format!("{app}'s agent asks"),
         }

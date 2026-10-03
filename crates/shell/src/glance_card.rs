@@ -16,8 +16,10 @@
 //! the desktop panel's 328 pt). Height: the card's own measured height,
 //! clamped to [`TILE_MIN_HEIGHT`]..=[`TILE_MAX_HEIGHT`] (room for a whole
 //! action card, its buttons included); until the first draw measures it,
-//! [`TILE_DEFAULT_HEIGHT`]. A taller card is clipped at the
-//! cap; the app is one tap away. A script card should size its root `Fit`.
+//! [`TILE_DEFAULT_HEIGHT`]. A taller card is clipped at the cap ([`overflow`]
+//! says by how much), or scrolled inside its tile where the surface offers
+//! that ([`GlanceTiles::draw_scrolled`]: the glance panel); the app is one
+//! tap away. A script card should size its root `Fit`.
 //!
 //! **Policy.** A tile's isolate runs under the publishing app's resolved
 //! policy, applied exactly as the Card runner applies it
@@ -41,10 +43,15 @@
 //! "l0:{e,k,v}", v?)` (Octoscript-Makepad's general translation). Every
 //! isolate gets a host `NAV` ([`install_nav`]) that queues the call with the
 //! isolate's heap key; nothing else reads it. The card window
-//! (glance_sheet.rs) takes its own isolate's calls ([`take_taps`]) and runs
-//! them through an [`L0Session`]: the declared transition (`octoscript_ui_l0`
-//! dispatch), the §5.12 writes the host performs, and a re-lowering. A
-//! glance-panel tile does not dispatch: its L0 taps stay inert.
+//! (glance_sheet.rs), the desktop's glance panel (glance_panel.rs) and the
+//! phone's glance page (mobile_pages.rs `GlanceCards`) keep their L0 cards
+//! in a [`LiveCards`], one path for all three: a tile's own isolate's calls
+//! ([`take_taps`], never another tile's) run through its card's
+//! [`L0Session`], made for the app that published the card: the declared
+//! transition (`octoscript_ui_l0` dispatch), the §5.12 writes the host
+//! performs (a `sys.chat` append, glance_chat.rs), and a re-lowering. On the
+//! phone the shell first drops a card's clicks ([`drop_clicks`]) when the
+//! finger was no plain tap on that card: a page swipe, a pull, a long press.
 use makepad_widgets::*;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -76,6 +83,21 @@ macro_rules! l0_kit {
 }
 
 const PALETTE_BASE: &str = l0_kit!("_palette_dark.octoscript");
+
+/// The shell's mode, for a card that names no theme of its own: it takes
+/// the light palette in a light shell and the dark one in a dark shell, as
+/// every other surface does (desktop_app.rs sets it with the style; a live
+/// card lowers again when it changes, [`L0Session::mode_moved`]).
+static DARK: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+/// Set the shell's mode; true when it changed.
+pub fn set_dark(dark: bool) -> bool {
+    DARK.swap(dark, std::sync::atomic::Ordering::Relaxed) != dark
+}
+
+pub fn dark() -> bool {
+    DARK.load(std::sync::atomic::Ordering::Relaxed)
+}
 const DERIVE_COLOR: &str = l0_kit!("_derive_color.octoscript");
 const DERIVE: &str = l0_kit!("_derive.octoscript");
 const KIT: &str = l0_kit!("_kit.octoscript");
@@ -116,7 +138,7 @@ fn lower_report(source: &str, report: octoscript_ui_l0::RealizeReport, l0_ui: bo
     if octoscript_ui_l0::kit_pack::contains(root) {
         return Err("native kit components are not offered on a glance tile".into());
     }
-    let mood = octoscript_ui_l0::card_theme(source).unwrap_or_else(|| "dark".into());
+    let mood = octoscript_ui_l0::card_theme(source).unwrap_or_else(|| if dark() { "dark" } else { "light" }.into());
     let delta = MOODS.iter().find(|(name, _)| *name == mood).map(|(_, d)| *d).ok_or_else(|| format!("theme {mood:?} is not offered on a glance tile"))?;
     for (axis, value) in octoscript_ui_l0::card_theme_axes(source) {
         if !matches!(value.as_str(), "neutral" | "regular" | "none" | "soft" | "sans") {
@@ -254,18 +276,30 @@ pub fn install_nav(vm: &mut ScriptVm) {
                 vm.bx.heap.cast_to_string(v, &mut text);
                 text
             });
-            let heap = vm.bx.heap.heap_key();
-            if let Ok(mut taps) = TAPS.lock() {
-                // Bounded: a card no surface reads cannot grow it forever.
-                if taps.len() >= 64 {
-                    taps.remove(0);
-                }
-                taps.push(Tap { heap, target, typed });
-            }
+            queue_tap(Tap { heap: vm.bx.heap.heap_key(), target, typed });
             NIL
         })
     };
     vm.set_injected_global(id!(NAV), nav.into());
+}
+
+/// The most `NAV` calls kept waiting: a card no surface reads cannot grow
+/// the queue forever.
+const TAPS_MAX: usize = 64;
+
+fn queue_tap(tap: Tap) {
+    if let Ok(mut taps) = TAPS.lock() {
+        if taps.len() >= TAPS_MAX {
+            taps.remove(0);
+        }
+        taps.push(tap);
+    }
+}
+
+/// [`queue_tap`], for another module's tests: a card's `NAV` call.
+#[cfg(all(test, feature = "app-hub"))]
+pub(crate) fn queue_tap_for_test(tap: Tap) {
+    queue_tap(tap)
 }
 
 /// Register [`install_nav`] for every isolate made from now on, once, with
@@ -284,11 +318,46 @@ pub fn ensure_nav() {
     }
 }
 
-/// The queued `NAV` calls from the isolate `heap`; every other isolate's
-/// queued calls are dropped (nothing dispatches them).
+/// The queued `NAV` calls from the isolate `heap`, in order, taken off the
+/// queue. Every other isolate's calls stay for the surface whose tile it is
+/// (two surfaces dispatch: the card window and the glance panel); those of
+/// a tile no surface dispatches go when the queue is full, or when the tile
+/// does ([`drop_taps`]).
 pub fn take_taps(heap: usize) -> Vec<Tap> {
-    let taps = TAPS.lock().map(|mut t| std::mem::take(&mut *t)).unwrap_or_default();
-    taps.into_iter().filter(|t| t.heap == heap).collect()
+    let Ok(mut taps) = TAPS.lock() else { return Vec::new() };
+    if !taps.iter().any(|t| t.heap == heap) {
+        return Vec::new();
+    }
+    let (mine, others) = std::mem::take(&mut *taps).into_iter().partition(|t| t.heap == heap);
+    *taps = others;
+    mine
+}
+
+/// Whether the isolate `heap` has a click waiting: a call with no text (a
+/// tap target's; a field's carries its text). A tap target claims no press,
+/// so this is how a surface learns that a press was on one (glance_panel.rs).
+pub fn has_clicks(heap: usize) -> bool {
+    TAPS.lock().is_ok_and(|taps| taps.iter().any(|t| t.heap == heap && t.typed.is_none()))
+}
+
+/// Forget the queued calls of the isolate `heap`, whose tile went away: a
+/// heap key is unique only while its isolate lives, so a later isolate may
+/// get the same one, and must not run the calls the old one queued.
+pub fn drop_taps(heap: usize) {
+    if let Ok(mut taps) = TAPS.lock() {
+        taps.retain(|t| t.heap != heap);
+    }
+}
+
+/// Forget the isolate `heap`'s queued clicks, its calls with no text (a tap
+/// target's), and keep its field edits (a field's call carries the text the
+/// person typed): for a surface whose finger was no tap on that tile
+/// (mobile_pages.rs `GlanceCards`). How many went.
+pub fn drop_clicks(heap: usize) -> usize {
+    let Ok(mut taps) = TAPS.lock() else { return 0 };
+    let before = taps.len();
+    taps.retain(|t| t.heap != heap || t.typed.is_some());
+    before - taps.len()
 }
 
 /// `l0:{"e":event,"k":instance key,"v":value}` → `(key, event, value)`.
@@ -298,10 +367,10 @@ pub fn parse_tap(target: &str) -> Option<(String, String, String)> {
     Some((field("k")?, field("e")?, field("v").unwrap_or_default()))
 }
 
-/// A live L0 card in the card window: the app that published it, its
-/// source, its data as published and its local state. Its `sys.chat`
-/// sources are answered by the host on every lowering and dispatch
-/// (glance_chat.rs), never from `data`.
+/// A live L0 card (in the card window or a glance-panel tile): the app that
+/// published it, its source, its data as published and its local state. Its
+/// `sys.chat` sources are answered by the host on every lowering and
+/// dispatch (glance_chat.rs), never from `data`.
 pub struct L0Session {
     pub app: String,
     pub source: String,
@@ -309,6 +378,10 @@ pub struct L0Session {
     pub store: octoscript_ui_l0::InstanceStore,
     /// The chat generation the card was last lowered at.
     chat_generation: u64,
+    /// The card reads a `sys.chat` (worked out once: every event asks).
+    reads_chat: bool,
+    /// The shell's mode the card was last lowered in.
+    dark: bool,
 }
 
 /// What a tap did to an [`L0Session`].
@@ -335,7 +408,15 @@ fn node_arg<'a>(node: &'a octoscript_ui_l0::UiNode, name: &str) -> Option<&'a oc
 impl L0Session {
     /// The card `app` published.
     pub fn new(app: &str, l0: &crate::glance::L0Source) -> Self {
-        L0Session { app: app.to_string(), source: l0.source.clone(), data: l0.data.clone(), store: Default::default(), chat_generation: crate::glance_chat::generation() }
+        L0Session {
+            app: app.to_string(),
+            source: l0.source.clone(),
+            data: l0.data.clone(),
+            store: Default::default(),
+            chat_generation: crate::glance_chat::generation(),
+            reads_chat: crate::glance_chat::reads_chat(&l0.source),
+            dark: dark(),
+        }
     }
 
     /// The data the card reads now: as published, with the host's answer
@@ -347,13 +428,48 @@ impl L0Session {
     /// The card as it stands now, lowered for a Splash.
     pub fn body(&mut self) -> Result<String, String> {
         self.chat_generation = crate::glance_chat::generation();
+        self.dark = dark();
         lower_with_state(&self.source, &self.data_now(), &self.store)
+    }
+
+    /// The shell changed mode since the card was last lowered: lower it
+    /// again in the new palette.
+    pub fn mode_moved(&self) -> bool {
+        self.dark != dark()
     }
 
     /// A conversation the card reads changed since it was last lowered (a
     /// reply arrived): lower it again.
     pub fn chat_moved(&self) -> bool {
-        self.chat_generation != crate::glance_chat::generation() && crate::glance_chat::reads_chat(&self.source)
+        self.reads_chat && self.chat_generation != crate::glance_chat::generation()
+    }
+
+    /// Carry out one tile's queued `NAV` calls, in order, then lower the
+    /// card again when a tap, or a conversation the card reads (the agent's
+    /// reply), moved it: the dispatch the card window and the glance panel
+    /// share ([`LiveCards`]). The new body when the card changed; `who`
+    /// heads the log lines (`glance sheet: os.mail/ana-contract`).
+    pub fn run(&mut self, taps: Vec<Tap>, who: &str) -> Option<String> {
+        let mut relower = self.chat_moved() || self.mode_moved();
+        for tap in taps {
+            match self.tap(&tap.target, tap.typed.as_deref()) {
+                Ok(outcome) => {
+                    log!("{who} tap {} (applied {}, relower {})", outcome.event, outcome.applied, outcome.relower);
+                    relower |= outcome.relower;
+                }
+                Err(e) => log!("{who} tap refused: {e}"),
+            }
+        }
+        if !relower {
+            return None;
+        }
+        match self.body() {
+            Ok(body) => Some(body),
+            Err(e) => {
+                log!("{who} does not lower: {e}");
+                None
+            }
+        }
     }
 
     /// Carry out one `NAV` call from this card.
@@ -406,9 +522,96 @@ impl L0Session {
     }
 }
 
+/// The L0 cards one surface keeps live, by tile key: each card's
+/// [`L0Session`] and the body its tile draws now. The card window keeps one
+/// for its card, and the glance panel and the phone's glance page one for
+/// their tiles, so a tap runs the same way on each (module docs, "L0
+/// taps"). A script card is not kept here: it runs as published and keeps
+/// its own state.
+#[derive(Default)]
+pub struct LiveCards {
+    cards: HashMap<String, LiveCard>,
+}
+
+struct LiveCard {
+    /// The card's key (`app/card_id`), for the log.
+    key: String,
+    /// The publish the session runs: a newer publish of the card starts over.
+    published: std::sync::Arc<crate::glance::L0Source>,
+    session: L0Session,
+    body: std::sync::Arc<str>,
+}
+
+impl LiveCards {
+    /// What tile `tile` draws for `card`: an L0 card as its session has it
+    /// now (made on first use for the app that published the card, and made
+    /// again for a newer publish), a script card as published. `who` heads
+    /// the log lines (`glance panel`).
+    pub fn body(&mut self, tile: &str, card: &crate::glance::GlanceCard, who: &str) -> std::sync::Arc<str> {
+        let Some(l0) = &card.l0 else {
+            self.cards.remove(tile);
+            return card.body.clone();
+        };
+        if let Some(live) = self.cards.get_mut(tile).filter(|live| std::sync::Arc::ptr_eq(&live.published, l0)) {
+            // The shell changed mode: the card takes the new palette.
+            if live.session.mode_moved() {
+                match live.session.body() {
+                    Ok(body) => live.body = body.into(),
+                    Err(e) => log!("{who}: {} does not lower in the new mode: {e}", live.key),
+                }
+            }
+            return live.body.clone();
+        }
+        let mut session = L0Session::new(&card.app, l0);
+        let body: std::sync::Arc<str> = match session.body() {
+            Ok(body) => body.into(),
+            Err(e) => {
+                log!("{who}: {} lowers as published only: {e}", card.key());
+                card.body.clone()
+            }
+        };
+        self.cards.insert(tile.to_string(), LiveCard { key: card.key(), published: l0.clone(), session, body: body.clone() });
+        body
+    }
+
+    /// Run each live card's queued taps, those of its own tile's isolate
+    /// only, through its session ([`L0Session::run`]). True when a card
+    /// changed: the surface redraws.
+    pub fn dispatch(&mut self, cx: &mut Cx, tiles: &GlanceTiles, who: &str) -> bool {
+        let mut changed = false;
+        for (tile, live) in &mut self.cards {
+            let taps = tiles.heap_key(cx, tile).map(take_taps).unwrap_or_default();
+            if taps.is_empty() && !live.session.chat_moved() && !live.session.mode_moved() {
+                continue;
+            }
+            if let Some(body) = live.session.run(taps, &format!("{who}: {}", live.key)) {
+                live.body = body.into();
+                changed = true;
+            }
+        }
+        changed
+    }
+
+    /// Forget the cards whose tiles the surface no longer has (`live`: the
+    /// tile keys it keeps).
+    pub fn retain(&mut self, live: &[String]) {
+        self.cards.retain(|tile, _| live.contains(tile));
+    }
+
+    pub fn clear(&mut self) {
+        self.cards.clear();
+    }
+}
+
 /// The tile height for a measured card height.
 pub fn clamp_height(measured: f64) -> f64 {
     measured.clamp(TILE_MIN_HEIGHT, TILE_MAX_HEIGHT)
+}
+
+/// How much taller than its tile a card is, as last measured: what of it the
+/// tile cannot show at once (0 when it fits).
+pub fn overflow(key: &str) -> f64 {
+    measured_height(key).map_or(0.0, |m| (m - tile_height(key)).max(0.0))
 }
 
 thread_local! {
@@ -476,12 +679,26 @@ impl GlanceTiles {
     /// when it changed. The first draw seats the isolate under `app`'s
     /// policy (module docs).
     pub fn draw(&mut self, cx: &mut Cx2d, key: &str, app: &str, contained: bool, body: &std::sync::Arc<str>, rect: Rect) {
+        self.draw_scrolled(cx, key, app, contained, body, rect, 0.0);
+    }
+
+    /// [`Self::draw`], the card scrolled `scroll` points up inside its tile,
+    /// so a card taller than its tile shows its part from there down (the
+    /// glance panel's, glance_panel.rs `TileScroll`). The frame's own layout
+    /// scrolls, not a scroll view: no scroll bar claims a press, so a press
+    /// a card's controls do not claim stays unclaimed, and the card's hits
+    /// stay where it is drawn. Tiles that scroll by themselves (the card
+    /// window's) ignore it.
+    pub fn draw_scrolled(&mut self, cx: &mut Cx2d, key: &str, app: &str, contained: bool, body: &std::sync::Arc<str>, rect: Rect, scroll: f64) {
         if !CAN_RENDER {
             return;
         }
         ensure_vocabulary(cx);
         let splash = self.open(cx, key, app, contained, body);
         let Some(tile) = self.tiles.get_mut(key) else { return };
+        if !self.scroll {
+            tile.frame.as_view().set_scroll_pos(cx, dvec2(0.0, scroll.max(0.0)));
+        }
         let walk = Walk { abs_pos: Some(rect.pos), width: Size::Fixed(rect.size.x), height: Size::Fixed(rect.size.y), ..Walk::default() };
         let mut scope = Scope::empty();
         // Inside the card's isolate, as the Card runner draws its card.
@@ -558,10 +775,12 @@ impl GlanceTiles {
         for key in gone {
             if let Some(tile) = self.tiles.remove(&key) {
                 let splash = tile.frame.splash(cx, ids!(card));
-                // Its waiting host requests end with it: a late answer goes
-                // nowhere, never to a tile that takes its place.
-                #[cfg(any(feature = "app-hub", native_mobile))]
+                // Its waiting host requests and taps end with it: a late
+                // answer goes nowhere, and neither reaches a tile that
+                // takes its place (it may get the same heap key).
                 if let Some(heap) = splash.borrow_mut().and_then(|mut s| s.isolate_heap_key(cx)) {
+                    drop_taps(heap);
+                    #[cfg(any(feature = "app-hub", native_mobile))]
                     octosense_appstore::services::cancel_heap(heap);
                 }
                 splash.set_text(cx, "");
@@ -669,7 +888,8 @@ mod tests {
     }
 
     /// A system app, registered from a pack made on the fly, whose manifest
-    /// grants `glance` and `storage` and nothing else.
+    /// grants `glance` and `storage` and nothing else. It is registered as
+    /// a test's, so the catalog tests running beside these leave it out.
     #[cfg(feature = "app-hub")]
     fn register_test_app(id: &'static str) {
         let dir = std::env::temp_dir().join(format!("glance-tile-app-{id}-{}", std::process::id()));
@@ -682,7 +902,7 @@ mod tests {
         );
         std::fs::write(dir.join("manifest.json"), manifest).unwrap();
         let pack = serde_json::to_string(&octosense_app_hub::pack::pack_dir(&dir).unwrap()).unwrap();
-        octosense_appstore::system::register_system_app(octosense_appstore::system::SystemApp { id, name: "Glance test", pack: Box::leak(pack.into_boxed_str()), assets: &[] });
+        crate::apps::test_system_apps::register(octosense_appstore::system::SystemApp { id, name: "Glance test", pack: Box::leak(pack.into_boxed_str()), assets: &[] });
     }
 
     /// A Cx with the widgets and the tile frame registered, for driving
@@ -888,6 +1108,139 @@ mod tests {
         assert!(mark > body.find("Q?").unwrap() && mark < body.find("A.").unwrap(), "the mark sits on the agent's entry: {body}");
     }
 
+    /// A click waiting for an isolate is seen without taking it; a field's
+    /// edit (it carries text) is no click, and another isolate's is not its.
+    #[test]
+    fn a_waiting_click_is_seen_without_taking_it() {
+        const A: usize = 0x6a11_0011;
+        const B: usize = 0x6a11_0012;
+        queue_tap(Tap { heap: A, target: "a".into(), typed: Some("typed".into()) });
+        assert!(!has_clicks(A), "a field's edit is not a click");
+        queue_tap(Tap { heap: B, target: "b".into(), typed: None });
+        assert!(!has_clicks(A), "another isolate's click");
+        queue_tap(Tap { heap: A, target: "a".into(), typed: None });
+        assert!(has_clicks(A));
+        assert_eq!(take_taps(A).len(), 2, "seen, not taken");
+        assert!(!has_clicks(A));
+        drop_taps(B);
+    }
+
+    /// Taps are taken per isolate: a surface takes its own tile's, in
+    /// order, and leaves every other tile's for that tile's surface; a tile
+    /// that goes away takes its queued taps with it.
+    #[test]
+    fn taps_are_taken_by_the_isolate_that_queued_them() {
+        const A: usize = 0x6a11_0001;
+        const B: usize = 0x6a11_0002;
+        let tap = |heap, target: &str| Tap { heap, target: target.into(), typed: None };
+        queue_tap(tap(A, "a1"));
+        queue_tap(tap(B, "b1"));
+        queue_tap(tap(A, "a2"));
+        let mine: Vec<String> = take_taps(A).into_iter().map(|t| t.target).collect();
+        assert_eq!(mine, ["a1", "a2"]);
+        assert!(take_taps(A).is_empty(), "taken once");
+        drop_taps(B);
+        assert!(take_taps(B).is_empty(), "a swept tile's taps go with it");
+    }
+
+    /// The glance panel's tiles dispatch as the card window does (both keep
+    /// a `LiveCards`): a tile's L0 taps, taken from its own isolate only, run
+    /// through its card's session for the app that published it; the tile
+    /// then draws the card as it stands. Ask shows the host's transcript, a
+    /// question typed and committed is the person's entry, the agent's reply
+    /// follows (the demo's canned one), and the card shows both. A newer
+    /// publish starts the card over; a card no longer shown is forgotten.
+    #[cfg(feature = "app-hub")]
+    #[test]
+    fn the_panels_tiles_run_their_own_l0_taps_like_the_card_window() {
+        use crate::glance::{Caller, GlanceStore};
+        use crate::glance_chat::{Role, DEMO_ANSWER};
+        crate::glance_chat::set_demo_mail(true);
+        // The request card on a thread of its own (tests share the store).
+        let (_, title, source, data) = crate::glance::demo_mail().into_iter().find(|c| c.0 == "ana-contract").unwrap();
+        let source = source.replace("thread: \"ana-contract\"", "thread: \"panel-taps\"");
+        crate::glance_chat::store().seed_if_empty("os.mail", "panel-taps", &[(Role::User, "Earlier?"), (Role::Model, "Net 30.")], 0);
+        let publish = serde_json::json!({"card_id": "panel", "title": title, "source": source, "data": data});
+        let mut store = GlanceStore::default();
+        store.publish(&Caller::granted("os.mail"), &publish, 0).unwrap();
+        let card = store.card("os.mail/panel", 0).unwrap();
+        let key = card.key();
+
+        let mut cx = tile_cx();
+        let mut tiles = GlanceTiles::default();
+        let mut live = LiveCards::default();
+        let body = live.body(&key, &card, "glance panel");
+        assert!(body.contains("Reply") && body.contains("Ask") && !body.contains("Net 30."), "{body}");
+        tiles.open(&mut cx, &key, "os.mail", false, &"View{}".into());
+        tiles.open(&mut cx, "os.other/c", "os.other", false, &"View{}".into());
+        let heap = tiles.heap_key(&mut cx, &key).unwrap();
+        let other = tiles.heap_key(&mut cx, "os.other/c").unwrap();
+        assert_ne!(heap, other);
+
+        // Another tile's isolate asks for this card's Ask: not its tap. It
+        // stays queued for that tile's surface.
+        let ask = target_for(&body, "ask");
+        queue_tap(Tap { heap: other, target: ask.clone(), typed: None });
+        live.dispatch(&mut cx, &tiles, "glance panel");
+        assert!(!live.body(&key, &card, "glance panel").contains("Net 30."), "this card did not move");
+        assert_eq!(take_taps(other).len(), 1);
+
+        // Its own tile's isolate does.
+        queue_tap(Tap { heap, target: ask, typed: None });
+        assert!(live.dispatch(&mut cx, &tiles, "glance panel"), "the card changed");
+        let asked = live.body(&key, &card, "glance panel");
+        assert!(asked.contains("Earlier?") && asked.contains("Net 30."), "the host's transcript: {asked}");
+
+        // Return in the field sends what the person typed.
+        let (k, e, _) = targets(&asked).into_iter().find(|(k, e, _)| e == "submit" && k.contains("Field")).expect("the field commits");
+        let commit = format!("l0:{}", serde_json::json!({"e": e, "k": k, "v": "$$"}));
+        queue_tap(Tap { heap, target: commit, typed: Some("When do they need it?".into()) });
+        assert!(live.dispatch(&mut cx, &tiles, "glance panel"));
+        let entries = crate::glance_chat::store().entries("os.mail", "panel-taps");
+        let last: Vec<(Role, &str)> = entries.iter().rev().take(2).rev().map(|e| (e.role, e.text.as_str())).collect();
+        assert_eq!(last, [(Role::User, "When do they need it?"), (Role::Model, DEMO_ANSWER)]);
+        let answered = live.body(&key, &card, "glance panel");
+        assert!(answered.contains("When do they need it?") && answered.contains(DEMO_ANSWER), "{answered}");
+
+        // A newer publish of the card starts it over, as published.
+        store.publish(&Caller::granted("os.mail"), &publish, 1).unwrap();
+        let newer = store.card("os.mail/panel", 1).unwrap();
+        assert!(!live.body(&key, &newer, "glance panel").contains(DEMO_ANSWER), "back to the brief");
+        // A tile the surface drops takes its session and its queued taps.
+        queue_tap(Tap { heap: other, target: "l0:{}".into(), typed: None });
+        tiles.sweep(&mut cx, std::slice::from_ref(&key));
+        live.retain(&[]);
+        assert!(take_taps(other).is_empty());
+        assert!(!live.body(&key, &newer, "glance panel").contains(DEMO_ANSWER));
+    }
+
+    /// Without the glance demo: a card with buttons that any app with the
+    /// `glance` grant publishes (here a store app) dispatches from its panel
+    /// tile, its taps running for that app.
+    #[cfg(feature = "app-hub")]
+    #[test]
+    fn a_card_with_buttons_dispatches_from_the_panel_without_the_demo() {
+        use crate::glance::{Caller, GlanceStore};
+        let (_, _, source, data) = crate::glance::demo_mail().into_iter().find(|c| c.0 == "ups-lamp").unwrap();
+        let mut store = GlanceStore::default();
+        let shop = Caller::granted("com.example.shop");
+        store.publish(&shop, &serde_json::json!({"card_id": "parcel", "title": "Your parcel", "source": source, "data": data}), 0).unwrap();
+        let card = store.card("com.example.shop/parcel", 0).unwrap();
+        let mut cx = tile_cx();
+        let mut tiles = GlanceTiles::default();
+        let mut live = LiveCards::default();
+        let body = live.body(&card.key(), &card, "glance panel");
+        tiles.open(&mut cx, &card.key(), &card.app, true, &"View{}".into());
+        let heap = tiles.heap_key(&mut cx, &card.key()).unwrap();
+        queue_tap(Tap { heap, target: target_for(&body, "track"), typed: None });
+        assert!(live.dispatch(&mut cx, &tiles, "glance panel"));
+        let tracking = live.body(&card.key(), &card, "glance panel");
+        assert!(tracking.contains("Opening the carrier's tracking page"), "{tracking}");
+        queue_tap(Tap { heap, target: target_for(&tracking, "back"), typed: None });
+        assert!(live.dispatch(&mut cx, &tiles, "glance panel"));
+        assert!(live.body(&card.key(), &card, "glance panel").contains("Track"));
+    }
+
     /// The shipping card: carrier, status, ETA and Track; no reply.
     #[test]
     fn the_shipping_card_tracks_and_offers_no_reply() {
@@ -949,6 +1302,17 @@ mod tests {
         tiles.sweep(&mut cx, &[]);
         held.lock().unwrap().take().expect("the service holds the request").send(Ok(serde_json::Value::Null));
         assert!(take_replies_for(&[heap]).is_empty(), "nothing is left queued for the tile that went away");
+    }
+
+    /// A card taller than its tile overflows by the difference, as last
+    /// measured; one that fits, or that never drew, by nothing.
+    #[test]
+    fn a_card_taller_than_its_tile_overflows_by_the_difference() {
+        record_height("os.overflow/tall", TILE_MAX_HEIGHT + 80.0);
+        assert_eq!(overflow("os.overflow/tall"), 80.0);
+        record_height("os.overflow/short", 200.0);
+        assert_eq!(overflow("os.overflow/short"), 0.0);
+        assert_eq!(overflow("os.overflow/never"), 0.0);
     }
 
     #[test]
