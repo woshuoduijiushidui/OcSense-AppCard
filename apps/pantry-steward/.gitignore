@@ -1,0 +1,6 @@
+.local-state/
+build/
+__pycache__/
+*.pyc
+ai.env
+*.key

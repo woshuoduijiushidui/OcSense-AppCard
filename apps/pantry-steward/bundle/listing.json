@@ -1,0 +1,18 @@
+{
+  "schema": 1,
+  "subtitle": "把临期食材变成今晚的一顿饭",
+  "description": "独立 OctoScript 冰箱管家原型：首次建立饮食档案，手动确认食材入库，本地规则或官方宿主的 model.complete 服务生成菜单候选；用户接受后核对实际食用量并确认扣减。在线菜单经过结构、到期与用量校验。模型提供方和密钥由官方宿主管理，应用不读取 ai.env。没有模型服务时可使用本地规则。保留麦克风图标，但本版本不录音，语音识别暂不可用。未接入照片或 OCR，宿主关闭后不后台运行。发布者和隐私链接仍需作者确认，此包用于本地评审。",
+  "category": "lifestyle",
+  "keywords": ["冰箱", "库存", "临期", "Octoscript"],
+  "screenshots": ["screenshots/01-main.png", "screenshots/02-plan.png", "screenshots/03-confirm.png", "screenshots/04-updated.png"],
+  "icon": "assets/icon.svg",
+  "platforms": ["windows"],
+  "publisher": {
+    "name": "待作者确认",
+    "support": "https://github.com/woshuoduijiushidui/OcSense-AppCard/issues",
+    "privacy_policy_url": "https://github.com/woshuoduijiushidui/OcSense-AppCard/blob/main/apps/pantry-steward/PRIVACY.md"
+  },
+  "release_notes": "0.4.1：迁移到未修改的官方 OctoSense；适配官方 model.budget 返回值；移除自定义语音服务依赖和 microphone 权限，保留暂不可用提示；使用独立本机测试目录。源应用包未签名，测试镜像使用本机测试签名，不代表正式发布。",
+  "age_rating": "all",
+  "license": "Apache-2.0"
+}
